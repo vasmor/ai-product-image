@@ -1,4 +1,4 @@
-#!c:\ai-product-image-project\venv39\scripts\python.exe
+#!c:\ai-product-image-project-new\venv39\scripts\python.exe
 __author__ = 'jszheng'
 import optparse
 import sys

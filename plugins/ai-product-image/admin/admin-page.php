@@ -197,15 +197,24 @@ function ai_product_image_admin_page() {
                     <th>Время/интервал (минуты)</th>
                     <td><input type="number" name="ai_image_cron_time" value="<?php echo esc_attr(get_option('ai_image_cron_time', 15)); ?>" class="small-text"></td>
                 </tr>
+                <tr><th colspan="2"><b>RunwayML API</b></th></tr>
+                <tr>
+                    <th>API-ключ RunwayML</th>
+                    <td>
+                        <input type="password" name="ai_image_runwayml_api_key" value="<?php echo esc_attr(get_option('ai_image_runwayml_api_key', '')); ?>" autocomplete="off" style="width: 350px;">
+                        <p class="description">Введите ваш персональный API-ключ RunwayML. Ключ хранится в базе данных WordPress.</p>
+                    </td>
+                </tr>
                 <tr><th colspan="2"><b>Метод удаления логотипа</b></th></tr>
                 <tr>
                     <th>Метод удаления логотипа</th>
                     <td>
                         <select name="ai_image_logo_removal_method">
-                            <option value="opencv" <?php selected(get_option('ai_image_logo_removal_method', 'opencv'), 'opencv'); ?>>OpenCV (быстро)</option>
-                            <option value="lama" <?php selected(get_option('ai_image_logo_removal_method', 'opencv'), 'lama'); ?>>Lama Cleaner (AI, качественно)</option>
+                            <!-- <option value="opencv" <?php /* selected(get_option('ai_image_logo_removal_method', 'opencv'), 'opencv'); */ ?>>OpenCV (быстро)</option> -->
+                            <!-- <option value="lama" <?php /* selected(get_option('ai_image_logo_removal_method', 'opencv'), 'lama'); */ ?>>Lama Cleaner (AI, качественно)</option> -->
+                            <option value="runwayml" <?php selected(get_option('ai_image_logo_removal_method', 'runwayml'), 'runwayml'); ?>>RunwayML (облако, AI)</option>
                         </select>
-                        <p class="description">OpenCV — быстрый классический inpaint, Lama — AI-инпейтинг (лучше восстанавливает фон, но требует установки lama-cleaner).</p>
+                        <p class="description">Доступен только RunwayML (облачный AI). Для активации других методов раскомментируйте соответствующие строки в коде и доработайте интеграцию.</p>
                     </td>
                 </tr>
                 <tr>

@@ -181,7 +181,8 @@ class AI_Product_Image_Task_Manager {
                 'color_speed_idx_bg' => get_option('ai_image_color_speed_idx_bg'),
                 'width' => get_option('ai_image_width', 620),
                 'height' => get_option('ai_image_height', 826),
-                'logo_removal_method' => get_option('ai_image_logo_removal_method', 'opencv'),
+                'logo_removal_method' => 'runwayml',
+                'runwayml_api_key' => get_option('ai_image_runwayml_api_key', ''),
                 'debug_logging' => $debug_logging ? true : false,
             ], $settings)
         ];

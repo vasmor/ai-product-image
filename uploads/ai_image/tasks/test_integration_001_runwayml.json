@@ -1,0 +1,25 @@
+{
+  "task_id": "test_integration_001_runwayml",
+  "type": "tyre",
+  "original_image": "originals/test_image.jpg",
+  "template": "templates/test_template.jpg",
+  "icon": "logos/test_icon.png",
+  "product_data": {
+    "brand": "TestBrand",
+    "model": "TestModel",
+    "width": "205",
+    "height": "55",
+    "diameter": "R16",
+    "load_index": "94",
+    "speed_index": "T",
+    "season": "зима",
+    "studded": true
+  },
+  "output_filename": "processed/test_integration_001_runwayml_ai.jpg",
+  "created_at": "2025-07-02T01:46:28+03:00",
+  "params": {
+    "logo_removal_method": "runwayml",
+    "debug_logging": true,
+    "runwayml_api_key": "key_d40191f2cec560bec8365bddb6c49ab0b21797c81ebaa5b7e0cbf28a32c5691a5510b155d0c4b955a1b71d82db3039570814cb995981a865dfce9397aa9f4d57"
+  }
+}

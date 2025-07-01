@@ -1,0 +1,9 @@
+{
+  "task_id": "test_integration_001_runwayml",
+  "status": "success",
+  "output_image": "processed\\test_integration_001_runwayml_ai.jpg",
+  "message": "OK",
+  "started_at": "",
+  "finished_at": "",
+  "error": null
+}

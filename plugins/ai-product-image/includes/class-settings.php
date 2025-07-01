@@ -60,6 +60,7 @@ class AI_Product_Image_Settings {
         register_setting( 'ai_image_settings', 'ai_image_cron_time' );
         register_setting( 'ai_image_settings', 'ai_image_logo_removal_method' );
         register_setting( 'ai_image_settings', 'ai_image_debug_logging' );
+        register_setting( 'ai_image_settings', 'ai_image_runwayml_api_key' );
     }
 
     /**

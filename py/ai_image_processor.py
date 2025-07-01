@@ -16,6 +16,7 @@ import uuid
 import io
 import requests
 import importlib.util
+import base64
 
 # --- Явная проверка Python 3.9 и активация venv39 (только для Windows) ---
 if not (sys.version_info.major == 3 and sys.version_info.minor == 9):
@@ -44,13 +45,14 @@ if CONFIG_PATH.exists():
 else:
     raise RuntimeError(f'config.yaml not found: {CONFIG_PATH}')
 
-TASKS_DIR = Path(config['tasks_dir'])
-RESULTS_DIR = Path(config['results_dir'])
-LOGS_DIR = Path(config['logs_dir'])
-ORIGINALS_DIR = Path(config['originals_dir'])
-PROCESSED_DIR = Path(config['processed_dir'])
-TEMPLATES_DIR = Path(config['templates_dir'])
-LOGOS_DIR = Path(config['logos_dir'])
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+TASKS_DIR = (PROJECT_ROOT / config['tasks_dir']).resolve()
+RESULTS_DIR = (PROJECT_ROOT / config['results_dir']).resolve()
+LOGS_DIR = (PROJECT_ROOT / config['logs_dir']).resolve()
+ORIGINALS_DIR = (PROJECT_ROOT / config['originals_dir']).resolve()
+PROCESSED_DIR = (PROJECT_ROOT / config['processed_dir']).resolve()
+TEMPLATES_DIR = (PROJECT_ROOT / config['templates_dir']).resolve()
+LOGOS_DIR = (PROJECT_ROOT / config['logos_dir']).resolve()
 BATCH_SIZE = config.get('batch_size', 10)
 
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -74,9 +76,9 @@ TASK_SCHEMA = {
 # --- КОНСТАНТЫ ДЛЯ КОМПОНОВКИ ---
 COEFF = {
     'brand_font': 0.103,
-    'brand_y': 0.048,
+    'brand_y': 0.058,
     'model_font': 0.052,
-    'model_y': 0.15,
+    'model_y': 0.156,
     'specs_main_font': 0.083,
     'specs_rim_font': 0.083,
     'specs_x': 0.5,
@@ -89,8 +91,8 @@ COEFF = {
     'index_box_h': 0.1295,
     'season_font': 0.0419,
     'season_x': 0.0639,
-    'season_y': 0.7924,
-    'season_y2': 0.8287,
+    'season_y': 0.7966,
+    'season_y2': 0.8329,
     'tire_w': 0.5177,
     'tire_h': 0.5835,
     'tire_x': 0.3854,
@@ -99,20 +101,6 @@ COEFF = {
 
 # --- Альтернативный режим восстановления шины под логотипом ---
 ALT_TIRE_INPAINT = True  # Включить альтернативный inpaint только по шине
-
-# --- Импорт YOLOv8 (ultralytics) ---
-ultralytics_spec = importlib.util.find_spec("ultralytics")
-if ultralytics_spec is not None:
-    from ultralytics import YOLO
-    YOLO_MODEL_PATH = str(Path(__file__).parent.parent / 'runs/detect/train/weights/best.pt')
-    try:
-        yolo_model = YOLO(YOLO_MODEL_PATH)
-    except Exception as e:
-        yolo_model = None
-        print(f"[YOLOv8] Ошибка загрузки модели: {e}")
-else:
-    yolo_model = None
-    print("[YOLOv8] ultralytics не установлен!")
 
 def validate_task_json(task):
     try:
@@ -201,10 +189,10 @@ def draw_specs(draw, main_text, rim_text, width, height, font_path_semibold, fon
     if debug_logging:
         print(f'draw_specs: main rect {rect_coords}')
         logger.debug(f'draw_specs: main rect {rect_coords}')
-    draw.rounded_rectangle(
-        rect_coords,
-        radius=int(height*0.03), fill=LIGHT_BG
-    )
+    # draw.rounded_rectangle(
+    #     rect_coords,
+    #     radius=int(height*0.03), fill=LIGHT_BG
+    # )
     draw.text(
         ((specs_x - main_w//2) + main_text_x, main_text_y),
         main_text, font=main_font, fill=BLACK, anchor='ls'
@@ -220,10 +208,10 @@ def draw_specs(draw, main_text, rim_text, width, height, font_path_semibold, fon
         logger.debug(f'draw_specs: rim rect {rim_rect}')
     print(f'draw_specs: rim_text="{rim_text}", x={rim_x + (rim_x2 - rim_x)//2}, y={rim_y + int((rim_y2 - rim_y) * 0.0746)}, font_size={rim_font.size}')
     logger.debug(f'draw_specs: rim_text="{rim_text}", x={rim_x + (rim_x2 - rim_x)//2}, y={rim_y + int((rim_y2 - rim_y) * 0.0746)}, font_size={rim_font.size}')
-    draw.rounded_rectangle(
-        rim_rect,
-        radius=int(height*0.027), fill=CYAN
-    )
+    #draw.rounded_rectangle(
+    #    rim_rect,
+    #    radius=int(height*0.027), fill=CYAN
+    #)
     rim_w = rim_x2 - rim_x
     rim_h = rim_y2 - rim_y
     draw.text(
@@ -260,10 +248,10 @@ def draw_index_box(draw, value, text1, text2, width, height, bg_color, x, y, fon
     if debug_logging:
         print(f'draw_index_box: rect {rect_coords}')
         logger.debug(f'draw_index_box: rect {rect_coords}')
-    draw.rounded_rectangle(rect_coords, radius=int(height*0.027), fill=bg_color)
+    #draw.rounded_rectangle(rect_coords, radius=int(height*0.027), fill=bg_color)
     draw.text((cx, cy), value, font=num_font, fill=WHITE, anchor='lt')
-    draw.text((cx, y + int(box_h * 0.4554)), text1, font=text_font, fill=WHITE, anchor='lt')
-    draw.text((cx, y + int(box_h * 0.6883)), text2, font=text_font, fill=WHITE, anchor='lt')
+    #draw.text((cx, y + int(box_h * 0.4834)), text1, font=text_font, fill=WHITE, anchor='lt')
+    #draw.text((cx, y + int(box_h * 0.7255)), text2, font=text_font, fill=WHITE, anchor='lt')
 
 def draw_season(draw, season, icon_img, width, height, font_path_bold, WHITE, img=None, debug_logging=False):
     font = get_font(int(width * COEFF['season_font']), font_path_bold)
@@ -303,15 +291,43 @@ def draw_tire(img, tire_img, width, height):
 
 # --- Вспомогательные функции ---
 def crop_to_content(img):
+    """
+    Обрезает изображение по содержимому (убирает пустые края).
+    Работает с RGBA изображениями, учитывая прозрачность.
+    """
     arr = np.array(img)
-    mask = arr[..., 3] > 0
+    
+    # Если изображение RGB, конвертируем в RGBA
+    if arr.shape[2] == 3:
+        arr = np.dstack([arr, np.full(arr.shape[:2], 255, dtype=np.uint8)])
+    
+    # Создаем маску непрозрачных пикселей
+    if arr.shape[2] == 4:
+        # Для RGBA: учитываем альфа-канал
+        mask = arr[..., 3] > 10  # Небольшой порог для учета полупрозрачности
+    else:
+        # Для RGB: считаем все пиксели непрозрачными
+        mask = np.ones(arr.shape[:2], dtype=bool)
+    
+    # Находим границы содержимого
     coords = np.argwhere(mask)
     if coords.size == 0:
+        logger.warning("crop_to_content: не найдено содержимое для обрезки")
         return img
+    
     y0, x0 = coords.min(axis=0)
     y1, x1 = coords.max(axis=0) + 1
+    
+    # Добавляем небольшой отступ
+    h, w = arr.shape[:2]
+    x0 = max(0, x0 - 5)
+    y0 = max(0, y0 - 5)
+    x1 = min(w, x1 + 5)
+    y1 = min(h, y1 + 5)
+    
     print(f'crop_to_content: crop box (x0={x0}, y0={y0}, x1={x1}, y1={y1})')
     logger.debug(f'crop_to_content: crop box (x0={x0}, y0={y0}, x1={x1}, y1={y1})')
+    
     return img.crop((x0, y0, x1, y1))
 
 def resolve_font_path(font_path):
@@ -374,7 +390,7 @@ def remove_logo_opencv(img, mask_salient, mask_auto, debug_path_prefix=None):
     import cv2
     import numpy as np
     img_np = np.array(img)
-    # Если mask_salient полностью нулевой (YOLOv8), используем только mask_auto
+    # Если mask_salient полностью нулевой, используем только mask_auto
     if np.count_nonzero(mask_salient) == 0:
         inpaint_mask = (mask_auto > 128).astype(np.uint8) * 255
         img_inpaint = cv2.inpaint(img_np[..., :3], inpaint_mask, 7, cv2.INPAINT_TELEA)
@@ -513,58 +529,143 @@ def remove_logo_lama(img, mask_salient, mask_auto, debug_path_prefix=None):
         logger.error(f'# LAMA_API_PATCH: Ошибка lama-cleaner API: {e}\n{tb}')
         raise RuntimeError(f'lama-cleaner API error: {e}\n{tb}')
 
-def get_yolo_logo_mask(img):
-    """
-    Запускает YOLOv8 на изображении, возвращает бинарную маску логотипа (сплошной белый прямоугольник по bbox, остальное чёрное)
-    """
-    if yolo_model is None:
-        raise RuntimeError("YOLOv8 модель не загружена!")
-    import numpy as np
-    from PIL import Image, ImageDraw
-    img_rgb = img.convert('RGB')
-    results = yolo_model.predict(img_rgb, imgsz=img.size[0], conf=0.2, verbose=False)
-    mask = Image.new('L', img.size, 0)
-    draw = ImageDraw.Draw(mask)
-    found = False
-    for r in results:
-        for box in r.boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            # Только сплошной белый прямоугольник по bbox
-            draw.rectangle([x1, y1, x2, y2], fill=255)
-            found = True
-    if not found:
-        print('[YOLOv8] Логотип не найден!')
-    return np.array(mask)
 
-def remove_logo_from_object(img, mask_path=None, logo_removal_method='opencv', debug_path_prefix=None):
-    """
-    Универсальное удаление логотипа с поддержкой выбора метода (OpenCV/Lama/YOLOv8)
-    """
+
+def remove_logo_from_object(img, mask_path=None, logo_removal_method='runwayml', debug_path_prefix=None, params=None):
     if img.mode != 'RGBA':
         img = img.convert('RGBA')
-    if logo_removal_method == 'yolov8':
-        # Новый сценарий: inpaint только по пересечению bbox и маски шины через lama-cleaner
-        mask_logo = get_yolo_logo_mask(img)
-        mask_tire = np.array(get_salient_mask_u2net(img)).astype(np.uint8)
-        mask_logo_on_tire = ((mask_logo > 128) & (mask_tire > 128)).astype(np.uint8) * 255
-        if debug_path_prefix:
-            mask_img = Image.fromarray(mask_logo)
-            mask_img.save(f'{debug_path_prefix}_yolo_mask.png')
-            mask_tire_img = Image.fromarray(mask_tire)
-            mask_tire_img.save(f'{debug_path_prefix}_tire_mask.png')
-            mask_logo_on_tire_img = Image.fromarray(mask_logo_on_tire)
-            mask_logo_on_tire_img.save(f'{debug_path_prefix}_logo_on_tire_mask.png')
-        mask_salient = np.zeros_like(mask_logo)  # не используется
-        # Используем lama-cleaner для восстановления
-        return remove_logo_lama(img, mask_salient, mask_logo_on_tire, debug_path_prefix)
-    else:
-        mask_salient = np.array(get_salient_mask_u2net(img)).astype(np.uint8)
-        mask_auto = get_auto_color_masks(img)
-        logger.info(f'Удаление логотипа методом: {logo_removal_method}')
-        if logo_removal_method == 'lama':
-            return remove_logo_lama(img, mask_salient, mask_auto, debug_path_prefix)
+    if logo_removal_method == 'runwayml':
+        prompt = params.get('runwayml_prompt', 'Remove any object overlapping the main subject (if present). After removal, realistically restore the main image. Also remove any external objects near the tire (such as texts, shapes, shadows, or elements not related to the tire drawing). The main subject is a car tire on a wheel, standing vertically and slightly rotated along the Y axis. If the source image contains two tires, remove the right one. If the tire is partially drawn (half, third, etc.), complete it so that the tire is whole. Do not change the tread pattern, texture, or color. If the tire is too rotated along the Y axis, rotate it counterclockwise to a more frontal view. Output: a single car tire on a wheel, standing vertically and slightly rotated along the Y axis, aspect ratio 321:482.') if params else 'Remove any object overlapping the main subject (if present). After removal, realistically restore the main image. Also remove any external objects near the tire (such as texts, shapes, shadows, or elements not related to the tire drawing). The main subject is a car tire on a wheel, standing vertically and slightly rotated along the Y axis. If the source image contains two tires, remove the right one. If the tire is partially drawn (half, third, etc.), complete it so that the tire is whole. Do not change the tread pattern, texture, or color. If the tire is too rotated along the Y axis, rotate it counterclockwise to a more frontal view. Output: a single car tire on a wheel, standing vertically and slightly rotated along the Y axis, aspect ratio 321:482.'
+        api_key = params.get('runwayml_api_key') if params else None
+        logger.info(f"Удаление логотипа методом: runwayml, prompt={prompt}")
+        logger.info(f"API-ключ из params: {'передан' if api_key else 'НЕ передан'}")
+        if not api_key:
+            logger.error("API-ключ RunwayML не передан!")
+            logger.error("Проверьте: 1) переменную окружения RUNWAYML_API_KEY, 2) передачу ключа в params задачи")
+            raise RuntimeError("API-ключ RunwayML не передан!")
+        return remove_logo_runwayml(img, prompt, api_key, debug_path_prefix)
+    # --- Для активации других методов раскомментируйте и доработайте код ниже ---
+    # elif logo_removal_method == 'lama':
+    #     ...
+    # else:
+    #     ...
+    # ------------------------------------------------------
+
+def remove_logo_runwayml(img, prompt, api_key, debug_path_prefix=None):
+    """
+    Удаление логотипа и восстановление объекта через runwayml.com API.
+    Использует официальный SDK RunwayML.
+    
+    Изображение автоматически ресайзится до максимальной стороны 720px
+    с сохранением пропорций. Соотношение сторон передается точно
+    как f"{width}:{height}".
+    
+    Документация: https://docs.dev.runwayml.com/
+    """
+    import io
+    import base64
+    from PIL import Image
+    
+    try:
+        from runwayml import RunwayML, TaskFailedError
+    except ImportError:
+        logger.error("[RunwayML] SDK RunwayML не установлен. Установите: pip install runwayml")
+        raise RuntimeError("SDK RunwayML не установлен. Установите: pip install runwayml")
+    
+    masked_key = (api_key[:5] + '...' + str(len(api_key))) if api_key else '(none)'
+    logger.info(f"[RunwayML] Используется API-ключ: {masked_key}")
+    
+    if not api_key:
+        logger.error("API-ключ RunwayML не передан или пуст!")
+        raise RuntimeError("API-ключ RunwayML не передан или пуст!")
+    
+    logger.info(f"[RunwayML] Старт отправки изображения на runwayml.com для удаления логотипа. Prompt: {prompt}")
+    
+    try:
+        # Инициализируем клиент RunwayML
+        client = RunwayML(api_key=api_key)
+        
+        # Ресайзим изображение для RunwayML с сохранением пропорций
+        # Цель: получить изображение, которое поместится в квадрат 720x720
+        w, h = img.size
+        target_size = 720
+        
+        if w > h and w > target_size:
+            # Ширина больше высоты и больше 720 - уменьшаем ширину до 720, высота в пропорции
+            new_w = target_size
+            new_h = int(h * target_size / w)
+        elif w < h and h > target_size:
+            # Высота больше ширины и больше 720 - уменьшаем высоту до 720, ширина в пропорции
+            new_h = target_size
+            new_w = int(w * target_size / h)
+        elif w == h and w > target_size:
+            # Квадратное изображение - обе стороны до 720, если они больше 720
+            new_w = target_size
+            new_h = target_size
         else:
-            return remove_logo_opencv(img, mask_salient, mask_auto, debug_path_prefix)
+            # Изображение уже меньше или равно 720px - оставляем как есть
+            new_w = w
+            new_h = h
+        
+        img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+        logger.info(f"[RunwayML] Изображение ресайзено: {w}x{h} -> {new_w}x{new_h}")
+        
+        # Конвертируем ресайзенное изображение в base64 data URI
+        img_bytes = io.BytesIO()
+        img_resized.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        base64_image = base64.b64encode(img_bytes.getvalue()).decode("utf-8")
+        data_uri = f"data:image/png;base64,{base64_image}"
+        
+        # Используем фиксированное соотношение 720:720 для RunwayML
+        ratio = "720:720"
+        logger.info(f"[RunwayML] Используется соотношение: {ratio}")
+        
+        task = client.text_to_image.create(
+            model='gen4_image',
+            ratio=ratio,
+            prompt_text=prompt,
+            reference_images=[
+                {
+                    'uri': data_uri,
+                    'tag': 'original',
+                },
+            ],
+        ).wait_for_task_output()
+        
+        logger.info("[RunwayML] Задача выполнена успешно")
+        
+        # Получаем результат (URL изображения)
+        if task.output and len(task.output) > 0:
+            image_url = task.output[0]
+            logger.info(f"[RunwayML] Получен URL результата: {image_url}")
+            
+            # Скачиваем изображение
+            import requests
+            response = requests.get(image_url, timeout=120)
+            response.raise_for_status()
+            
+            # Конвертируем в PIL Image
+            result_img = Image.open(io.BytesIO(response.content)).convert('RGBA')
+            
+            if debug_path_prefix:
+                result_img.save(f'{debug_path_prefix}_runwayml_result.png')
+            
+            logger.info("[RunwayML] Успешно получено изображение без логотипа.")
+            return result_img
+        else:
+            raise RuntimeError("RunwayML не вернул результат изображения")
+            
+    except TaskFailedError as e:
+        logger.error(f"[RunwayML] Задача не выполнена: {e}")
+        logger.error(f"[RunwayML] Детали ошибки: {e.task_details}")
+        raise RuntimeError(f"RunwayML task failed: {e}")
+    except Exception as e:
+        logger.error(f"[RunwayML] Ошибка при обращении к runwayml.com: {e}")
+        # Добавляем дополнительную диагностику согласно документации
+        if hasattr(e, 'response') and hasattr(e.response, 'text'):
+            logger.error(f"[RunwayML] Тело ответа: {e.response.text}")
+        raise RuntimeError(f"RunwayML API error: {e}")
 
 # --- Основная функция обработки ---
 def process_image(task):
@@ -580,6 +681,7 @@ def process_image(task):
         width = int(get_param('width', 620))
         height = int(get_param('height', 826))
         logo_removal_method = get_param('logo_removal_method', 'opencv')
+        logger.info(f"[PROCESS] Запуск обработки изображения. Метод удаления логотипа: {logo_removal_method}")
         # Пути к файлам
         orig_path = ORIGINALS_DIR / Path(task['original_image']).name
         background_path = TEMPLATES_DIR / Path(task['template']).name
@@ -628,12 +730,13 @@ def process_image(task):
         # 2. Открываем оригинал
         with Image.open(orig_path) as orig_img:
             orig_img = orig_img.convert('RGBA')
-            # 3. Удаляем логотип на исходнике
+            logger.info("[PROCESS] Удаление логотипа...")
             tire_img = remove_logo_from_object(
                 orig_img,
                 task.get('logo_mask'),
                 logo_removal_method=logo_removal_method,
-                debug_path_prefix=(str(output_path).replace('.', '_debug1') if debug_logging else None)
+                debug_path_prefix=(str(output_path).replace('.', '_debug1') if debug_logging else None),
+                params=params
             )
             if debug_logging:
                 debug_path = str(output_path).replace('.', '_debug2_nologo.')
@@ -641,15 +744,18 @@ def process_image(task):
                 if debug_path.lower().endswith(('.jpg', '.jpeg')) and tire_img.mode == 'RGBA':
                     img_to_save = tire_img.convert('RGB')
                 img_to_save.save(debug_path)
-            # 4. Удаляем фон (rembg)
+            logger.info("[PROCESS] Удаление фона...")
+            # Удаляем фон и конвертируем в RGBA для сохранения прозрачности
             tire_img_nobg = remove(tire_img)
+            if tire_img_nobg.mode != 'RGBA':
+                tire_img_nobg = tire_img_nobg.convert('RGBA')
             if debug_logging:
                 debug_path = str(output_path).replace('.', '_debug3_nobg.')
                 img_to_save = tire_img_nobg
                 if debug_path.lower().endswith(('.jpg', '.jpeg')) and tire_img_nobg.mode == 'RGBA':
                     img_to_save = tire_img_nobg.convert('RGB')
                 img_to_save.save(debug_path)
-            # 5. Обрезаем по содержимому
+            logger.info("[PROCESS] Обрезка по содержимому...")
             tire_img_crop = crop_to_content(tire_img_nobg)
             if debug_logging:
                 debug_path = str(output_path).replace('.', '_debug4_crop.')
@@ -662,19 +768,45 @@ def process_image(task):
         draw_brand(draw, BRAND, width, height, FONT_PATH_BOLD, WHITE, debug_logging)
         draw_model(draw, MODEL, width, height, FONT_PATH_SEMIBOLD, WHITE, debug_logging)
         draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width, height, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging)
-        draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width, height, LOAD_IDX_BG, int(width*COEFF['season_x']), int(height*0.44), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
-        draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width, height, SPEED_IDX_BG, int(width*COEFF['season_x']), int(height*0.616), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
-        draw_season(draw, SEASON, icon_img, width, height, FONT_PATH_BOLD, WHITE, img=img, debug_logging=debug_logging)
+        draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width, height, LOAD_IDX_BG, int(width*COEFF['season_x']), int(height*0.4541), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
+        draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width, height, SPEED_IDX_BG, int(width*COEFF['season_x']), int(height*0.628), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
+        #draw_season(draw, SEASON, icon_img, width, height, FONT_PATH_BOLD, WHITE, img=img, debug_logging=debug_logging)
         # --- Сохранение результата ---
-        output_path = PROCESSED_DIR / Path(task['output_filename']).name
+        # Обрабатываем output_filename: может содержать путь или только имя файла
+        output_filename = task['output_filename']
+        if '/' in output_filename or '\\' in output_filename:
+            # Если указан путь, берем только имя файла
+            final_output_path = PROCESSED_DIR / Path(output_filename).name
+        else:
+            # Если указано только имя файла
+            final_output_path = PROCESSED_DIR / output_filename
+        
+        # Диагностика перед сохранением
+        logger.info(f'[SAVE] Подготовка к сохранению: {final_output_path}')
+        logger.info(f'[SAVE] Тип img: {type(img)}')
+        logger.info(f'[SAVE] Размер img: {img.size if img else "None"}')
+        logger.info(f'[SAVE] Режим img: {img.mode if img else "None"}')
+        
+        if img is None:
+            logger.error('[SAVE] Ошибка: img равен None!')
+            return None
+        
         img_to_save = img
-        if str(output_path).lower().endswith(('.jpg', '.jpeg')) and img.mode == 'RGBA':
+        if str(final_output_path).lower().endswith(('.jpg', '.jpeg')) and img.mode == 'RGBA':
             img_to_save = img.convert('RGB')
-        img_to_save.save(output_path)
-        logger.info(f'Результат задачи {task["task_id"]} сохранён: {output_path}')
-        return str(output_path.relative_to(PROCESSED_DIR.parent))
+            logger.info('[SAVE] Конвертирован в RGB для JPG')
+        
+        # Проверяем, что папка существует
+        final_output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        img_to_save.save(final_output_path)
+        logger.info(f'[SAVE] Файл сохранен: {final_output_path}')
+        logger.info(f'[SAVE] Размер файла: {final_output_path.stat().st_size if final_output_path.exists() else "файл не найден"}')
+        
+        logger.info(f'Результат задачи {task["task_id"]} сохранён: {final_output_path}')
+        return str(final_output_path.relative_to(PROCESSED_DIR.parent))
     except Exception as e:
-        logger.error(f'Ошибка обработки изображения: {e}')
+        logger.error(f"[PROCESS] Ошибка обработки изображения: {e}")
         return None
 
 def process_task(task_path):
@@ -700,7 +832,6 @@ def process_task(task_path):
             'task_id': task_id,
             'status': status,
             'output_image': output_image,
-            'log': f'logs/{task_id}.log',
             'message': 'OK' if output_image else (error_msg or 'Ошибка обработки'),
             'started_at': '',
             'finished_at': '',
@@ -709,7 +840,6 @@ def process_task(task_path):
         result_path = RESULTS_DIR / f'{task_id}.json'
         with open(result_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
-        logger.info(f'Результат задачи {task_id} сохранён')
     except Exception as e:
         logger.error(f'Ошибка при обработке {task_path}: {e}')
 
