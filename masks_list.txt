@@ -1,3 +1,0 @@
-Абсолютный путь: C:\ai-product-image-project\lama-local\downloads\lama_dataset\masks
-Существует: False
-Всего файлов: 0
