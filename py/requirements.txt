@@ -1,0 +1,9 @@
+rembg
+pillow
+pyyaml
+jsonschema
+loguru
+opencv-python
+torch
+# u2net  # не нужен для pip, интеграция вручную 
+lama-cleaner 

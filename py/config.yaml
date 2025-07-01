@@ -1,0 +1,15 @@
+# Конфиг для ai_image_processor
+
+tasks_dir: uploads/ai_image/tasks
+results_dir: uploads/ai_image/results
+originals_dir: uploads/ai_image/originals
+processed_dir: uploads/ai_image/processed
+templates_dir: uploads/ai_image/templates
+logos_dir: uploads/ai_image/logos
+logs_dir: uploads/ai_image/logs
+batch_size: 10
+max_image_size: 4096
+log_level: INFO
+font_bold: uploads/ai_image/fonts/Inter-Bold.ttf
+font_semibold: uploads/ai_image/fonts/Inter-SemiBold.ttf
+font_regular: uploads/ai_image/fonts/Inter-Regular.ttf 

@@ -1,0 +1,24 @@
+{
+  "task_id": "test_integration_001_yolov8",
+  "type": "tyre",
+  "original_image": "originals/test_image.jpg",
+  "template": "templates/test_template.jpg",
+  "icon": "logos/test_icon.png",
+  "product_data": {
+    "brand": "TestBrand",
+    "model": "TestModel",
+    "width": "205",
+    "height": "55",
+    "diameter": "R16",
+    "load_index": "94",
+    "speed_index": "T",
+    "season": "зима",
+    "studded": true
+  },
+  "output_filename": "processed/test_integration_001_yolov8_ai.jpg",
+  "created_at": "2025-06-23T03:11:38+03:00",
+  "params": {
+    "logo_removal_method": "yolov8",
+    "debug_logging": true
+  }
+}
