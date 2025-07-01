@@ -141,4 +141,6 @@ Thumbs.db
 # WooCommerce/WordPress uploads
 uploads/ai_image/logs/
 uploads/ai_image/temp/
-uploads/ai_image/archive/ 
+uploads/ai_image/archive/
+
+py/u2net.pth 
