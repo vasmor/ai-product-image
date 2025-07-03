@@ -93,10 +93,10 @@ COEFF = {
     'season_x': 0.0639,
     'season_y': 0.7966,
     'season_y2': 0.8329,
-    'tire_w': 0.5177,
-    'tire_h': 0.5835,
-    'tire_x': 0.3854,
-    'tire_y': 0.3123,
+    'tire_w': 0.5677,
+    'tire_h': 0.6392,
+    'tire_x': 0.3725,
+    'tire_y': 0.3087,
 }
 
 # --- Альтернативный режим восстановления шины под логотипом ---
@@ -535,7 +535,7 @@ def remove_logo_from_object(img, mask_path=None, logo_removal_method='runwayml',
     if img.mode != 'RGBA':
         img = img.convert('RGBA')
     if logo_removal_method == 'runwayml':
-        prompt = params.get('runwayml_prompt', 'Remove any object overlapping the main subject (if present). After removal, realistically restore the main image. Also remove any external objects near the tire (such as texts, shapes, shadows, or elements not related to the tire drawing). The main subject is a car tire on a wheel, standing vertically and slightly rotated along the Y axis. If the source image contains two tires, remove the right one. If the tire is partially drawn (half, third, etc.), complete it so that the tire is whole. Do not change the tread pattern, texture, or color. If the tire is too rotated along the Y axis, rotate it counterclockwise to a more frontal view. Output: a single car tire on a wheel, standing vertically and slightly rotated along the Y axis, aspect ratio 321:482.') if params else 'Remove any object overlapping the main subject (if present). After removal, realistically restore the main image. Also remove any external objects near the tire (such as texts, shapes, shadows, or elements not related to the tire drawing). The main subject is a car tire on a wheel, standing vertically and slightly rotated along the Y axis. If the source image contains two tires, remove the right one. If the tire is partially drawn (half, third, etc.), complete it so that the tire is whole. Do not change the tread pattern, texture, or color. If the tire is too rotated along the Y axis, rotate it counterclockwise to a more frontal view. Output: a single car tire on a wheel, standing vertically and slightly rotated along the Y axis, aspect ratio 321:482.'
+        prompt = params.get('runwayml_prompt', 'Remove any object overlapping the main subject (if present), including logos and watermarks. After removal, realistically restore the main image. The main subject is a car tire on a wheel, standing vertically. Do not change, alter, distort, or remove any markings, symbols, texts, numbers, or labels present on the tire sidewalls, the tire itself, or the wheel. Improve the image quality. Output: a single car tire on a wheel, standing vertically.') if params else 'Remove any object overlapping the main subject (if present), including logos and watermarks. After removal, realistically restore the main image. The main subject is a car tire on a wheel, standing vertically. Do not change, alter, distort, or remove any markings, symbols, texts, numbers, or labels present on the tire sidewalls, the tire itself, or the wheel. Improve the image quality. Output: a single car tire on a wheel, standing vertically.'
         api_key = params.get('runwayml_api_key') if params else None
         logger.info(f"Удаление логотипа методом: runwayml, prompt={prompt}")
         logger.info(f"API-ключ из params: {'передан' if api_key else 'НЕ передан'}")
@@ -672,6 +672,7 @@ def process_image(task):
     """
     Основная функция обработки задачи: валидирует, проверяет файлы, компилирует изображение, логирует этапы.
     Новый порядок: 1) удаление логотипа, 2) удаление фона (rembg), 3) crop, 4) композит.
+    Внедрён суперсэмплинг и постобработка для повышения качества итогового изображения.
     """
     try:
         params = task.get('params', {})
@@ -722,11 +723,19 @@ def process_image(task):
         RIM = pd.get('diameter', '')
         LOAD_IDX = pd.get('load_index', '')
         SPEED_IDX = pd.get('speed_index', '')
-        SEASON = pd.get('season', '')
-        # 1. Загружаем и подгоняем фон по размеру
-        background = Image.open(background_path).convert('RGBA').resize((width, height), Image.LANCZOS)
+
+        # === SUPER SAMPLING/POSTPROCESSING ===
+        SUPER_SAMPLING_FACTOR = 3  # Можно увеличить до 3 для очень высоких требований
+        width_ss = width * SUPER_SAMPLING_FACTOR
+        height_ss = height * SUPER_SAMPLING_FACTOR
+        # === SUPER SAMPLING/POSTPROCESSING ===
+
+        # 1. Загружаем и подгоняем фон по размеру (Суперсэмплинг)
+        # background = Image.open(background_path).convert('RGBA').resize((width, height), Image.LANCZOS)
+        background = Image.open(background_path).convert('RGBA').resize((width_ss, height_ss), Image.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
         img = background.copy()
         draw = ImageDraw.Draw(img)
+
         # 2. Открываем оригинал
         with Image.open(orig_path) as orig_img:
             orig_img = orig_img.convert('RGBA')
@@ -763,46 +772,70 @@ def process_image(task):
                 if debug_path.lower().endswith(('.jpg', '.jpeg')) and tire_img_crop.mode == 'RGBA':
                     img_to_save = tire_img_crop.convert('RGB')
                 img_to_save.save(debug_path)
-        # 6. Отрисовываем все элементы
-        draw_tire(img, tire_img_crop, width, height)
-        draw_brand(draw, BRAND, width, height, FONT_PATH_BOLD, WHITE, debug_logging)
-        draw_model(draw, MODEL, width, height, FONT_PATH_SEMIBOLD, WHITE, debug_logging)
-        draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width, height, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging)
-        draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width, height, LOAD_IDX_BG, int(width*COEFF['season_x']), int(height*0.4541), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
-        draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width, height, SPEED_IDX_BG, int(width*COEFF['season_x']), int(height*0.628), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
-        #draw_season(draw, SEASON, icon_img, width, height, FONT_PATH_BOLD, WHITE, img=img, debug_logging=debug_logging)
+
+        # 6. Отрисовываем все элементы (Суперсэмплинг: подаем увеличенные размеры и шрифты)
+        # draw_tire(img, tire_img_crop, width, height)
+        draw_tire(img, tire_img_crop, width_ss, height_ss)  # === SUPER SAMPLING/POSTPROCESSING ===
+
+        # draw_brand(draw, BRAND, width, height, FONT_PATH_BOLD, WHITE, debug_logging)
+        draw_brand(draw, BRAND, width_ss, height_ss, FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+
+        # draw_model(draw, MODEL, width, height, FONT_PATH_SEMIBOLD, WHITE, debug_logging)
+        draw_model(draw, MODEL, width_ss, height_ss, FONT_PATH_SEMIBOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+
+        # draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width, height, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging)
+        draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width_ss, height_ss, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+
+        # draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width, height, LOAD_IDX_BG, int(width*COEFF['season_x']), int(height*0.4521), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
+        draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width_ss, height_ss, LOAD_IDX_BG, int(width_ss*COEFF['season_x']), int(height_ss*0.4521), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+
+        # draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width, height, SPEED_IDX_BG, int(width*COEFF['season_x']), int(height*0.628), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
+        draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width_ss, height_ss, SPEED_IDX_BG, int(width_ss*COEFF['season_x']), int(height_ss*0.628), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+
+        # --- SUPER SAMPLING: Уменьшаем изображение до целевого размера ---
+        # Сначала применим постобработку для повышения резкости и коррекции цвета (до ресайза)
+        from PIL import ImageEnhance, ImageFilter  # === SUPER SAMPLING/POSTPROCESSING ===
+
+        # Постобработка: Повышение резкости
+        enhancer_sharpness = ImageEnhance.Sharpness(img)
+        img = enhancer_sharpness.enhance(2)  # 1.0 - без изменений, >1 - сильнее
+
+        # Постобработка: Коррекция цвета (насыщенность)
+        enhancer_color = ImageEnhance.Color(img)
+        img = enhancer_color.enhance(1.3)  # 1.0 - без изменений, >1 - сильнее
+
+        # Можно добавить лёгкую фильтрацию для очистки артефактов
+        img = img.filter(ImageFilter.SMOOTH_MORE)  # по желанию
+
+        img = img.resize((width, height), Image.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
+
         # --- Сохранение результата ---
-        # Обрабатываем output_filename: может содержать путь или только имя файла
         output_filename = task['output_filename']
         if '/' in output_filename or '\\' in output_filename:
-            # Если указан путь, берем только имя файла
             final_output_path = PROCESSED_DIR / Path(output_filename).name
         else:
-            # Если указано только имя файла
             final_output_path = PROCESSED_DIR / output_filename
-        
-        # Диагностика перед сохранением
+
         logger.info(f'[SAVE] Подготовка к сохранению: {final_output_path}')
         logger.info(f'[SAVE] Тип img: {type(img)}')
         logger.info(f'[SAVE] Размер img: {img.size if img else "None"}')
         logger.info(f'[SAVE] Режим img: {img.mode if img else "None"}')
-        
+
         if img is None:
             logger.error('[SAVE] Ошибка: img равен None!')
             return None
-        
+
         img_to_save = img
         if str(final_output_path).lower().endswith(('.jpg', '.jpeg')) and img.mode == 'RGBA':
             img_to_save = img.convert('RGB')
             logger.info('[SAVE] Конвертирован в RGB для JPG')
-        
-        # Проверяем, что папка существует
+
         final_output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        img_to_save.save(final_output_path)
+
+        img_to_save.save(final_output_path, quality=100, subsampling=0)
         logger.info(f'[SAVE] Файл сохранен: {final_output_path}')
         logger.info(f'[SAVE] Размер файла: {final_output_path.stat().st_size if final_output_path.exists() else "файл не найден"}')
-        
+
         logger.info(f'Результат задачи {task["task_id"]} сохранён: {final_output_path}')
         return str(final_output_path.relative_to(PROCESSED_DIR.parent))
     except Exception as e:

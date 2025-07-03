@@ -41,11 +41,11 @@ TEST_TASK_ID = 'test_integration_001'
 TEST_TASK = {
     "task_id": TEST_TASK_ID,
     "product_data": {
-        "brand": "TestBrand",
-        "model": "TestModel",
-        "width": "205",
-        "height": "55",
-        "diameter": "R16"
+        "brand": "Sailun",
+        "model": "Ice Blazer WST3",
+        "width": "225",
+        "height": "65",
+        "diameter": "R17"
     },
     "original_image": "originals/test_image.png",
     "template": "templates/test_template.png",
@@ -105,19 +105,24 @@ def run_logo_removal_test(method):
         else:
             print('[TEST][ERROR] runwayml_api_key будет None в задаче!')
     
+    # Определяем расширение файла оригинала
+    original_image_path = next((ORIGINALS_DIR / f'test_image{ext}' for ext in ['.png', '.jpg', '.jpeg'] if (ORIGINALS_DIR / f'test_image{ext}').exists()), None)
+    if not original_image_path:
+        raise FileNotFoundError('Не найден файл test_image с расширением .png/.jpg/.jpeg в originals')
+
     test_task = {
         "task_id": f"{TEST_TASK_ID}_{method}",
         "type": "tyre",
-        "original_image": f"originals/test_image.jpg",
+        "original_image": str(original_image_path.relative_to(PROJECT_ROOT)),
         "template": f"templates/test_template.jpg",
         "icon": f"logos/test_icon.png",
         "product_data": {
-            "brand": "TestBrand",
-            "model": "TestModel",
-            "width": "205",
-            "height": "55",
-            "diameter": "R16",
-            "load_index": "94",
+            "brand": "Sailun",
+            "model": "Ice Blazer WST3",
+            "width": "225",
+            "height": "65",
+            "diameter": "R17",
+            "load_index": "102",
             "speed_index": "T",
             "season": "зима",
             "studded": True
@@ -181,12 +186,12 @@ def test_season_icon():
         "template": "templates/test_template.jpg",
         "icon": "logos/test_icon.png",
         "product_data": {
-            "brand": "TestBrand",
-            "model": "TestModel",
-            "width": "205",
-            "height": "55",
-            "diameter": "R16",
-            "load_index": "94",
+            "brand": "Sailun",
+            "model": "Ice Blazer WST3",
+            "width": "225",
+            "height": "65",
+            "diameter": "R17",
+            "load_index": "102",
             "speed_index": "T",
             "season": "зимняя"
         },
