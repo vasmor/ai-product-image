@@ -171,10 +171,6 @@ function ai_product_image_admin_page() {
                 <tr><th>Летние шины</th><td><?php echo wp_get_attachment_image( get_option('ai_image_background_summer'), 'medium' ); ?><br><?php echo wp_media_input('ai_image_background_summer'); ?></td></tr>
                 <tr><th>Зимние шины</th><td><?php echo wp_get_attachment_image( get_option('ai_image_background_winter'), 'medium' ); ?><br><?php echo wp_media_input('ai_image_background_winter'); ?></td></tr>
                 <tr><th>Всесезонные шины</th><td><?php echo wp_get_attachment_image( get_option('ai_image_background_allseason'), 'medium' ); ?><br><?php echo wp_media_input('ai_image_background_allseason'); ?></td></tr>
-                <tr><th colspan="2"><b>Иконки сезонности</b></th></tr>
-                <tr><th>Лето</th><td><?php echo wp_get_attachment_image( get_option('ai_image_icon_summer'), 'thumbnail' ); ?><br><?php echo wp_media_input('ai_image_icon_summer'); ?></td></tr>
-                <tr><th>Зима</th><td><?php echo wp_get_attachment_image( get_option('ai_image_icon_winter'), 'thumbnail' ); ?><br><?php echo wp_media_input('ai_image_icon_winter'); ?></td></tr>
-                <tr><th>Любой сезон</th><td><?php echo wp_get_attachment_image( get_option('ai_image_icon_any'), 'thumbnail' ); ?><br><?php echo wp_media_input('ai_image_icon_any'); ?></td></tr>
                 <tr><th colspan="2"><b>Логотип и шрифты</b></th></tr>
                 <tr><th>Inter-Bold.ttf</th><td><?php echo wp_media_input('ai_image_font_bold'); ?></td></tr>
                 <tr><th>Inter-SemiBold.ttf</th><td><?php echo wp_media_input('ai_image_font_semibold'); ?></td></tr>

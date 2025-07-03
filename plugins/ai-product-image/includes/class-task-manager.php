@@ -133,21 +133,6 @@ class AI_Product_Image_Task_Manager {
         $image_id = $product->get_image_id();
         $image_url = wp_get_attachment_url($image_id);
         $image_path = get_attached_file($image_id);
-        // Выбор фона и иконки по сезону
-        $season_lc = mb_strtolower($season);
-        if ($season_lc === 'летняя') {
-            $background = get_option('ai_image_background_summer');
-            $icon = get_option('ai_image_icon_summer');
-        } elseif ($season_lc === 'зимняя') {
-            $background = get_option('ai_image_background_winter');
-            $icon = get_option('ai_image_icon_winter');
-        } elseif ($season_lc === 'всесезонная') {
-            $background = get_option('ai_image_background_allseason');
-            $icon = get_option('ai_image_icon_any');
-        } else {
-            $background = get_option('ai_image_background_summer');
-            $icon = get_option('ai_image_icon_any');
-        }
         $output_filename = 'processed/product_' . $product_id . '_ai.png';
         $task_id = date('Ymd_His') . '_' . $product_id;
         $debug_logging = get_option('ai_image_debug_logging', 0);
@@ -156,7 +141,6 @@ class AI_Product_Image_Task_Manager {
             'type' => 'tyre',
             'original_image' => 'originals/' . basename($image_path),
             'template' => 'templates/' . basename(get_attached_file($background)),
-            'icon' => 'logos/' . basename(get_attached_file($icon)),
             'product_data' => [
                 'brand' => $brand,
                 'model' => $model,

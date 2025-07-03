@@ -49,7 +49,6 @@ TEST_TASK = {
     },
     "original_image": "originals/test_image.png",
     "template": "templates/test_template.png",
-    "icon": "logos/test_icon.png",
     "output_filename": f"{TEST_TASK_ID}_ai.png"
 }
 
@@ -115,7 +114,6 @@ def run_logo_removal_test(method):
         "type": "tyre",
         "original_image": str(original_image_path.relative_to(PROJECT_ROOT)),
         "template": f"templates/test_template.jpg",
-        "icon": f"logos/test_icon.png",
         "product_data": {
             "brand": "Sailun",
             "model": "Ice Blazer WST3",
@@ -175,64 +173,6 @@ def run_logo_removal_test(method):
     else:
         print('Результат не найден!')
         assert False, f'Результат не найден для метода {method}!'
-
-def test_season_icon():
-    print('--- Интеграционный тест: иконка сезонности ---')
-    prepare_test_files()  # копирует test_image, test_template, test_icon
-    test_task = {
-        "task_id": "test_season_icon_001",
-        "type": "tyre",
-        "original_image": "originals/test_image.jpg",
-        "template": "templates/test_template.jpg",
-        "icon": "logos/test_icon.png",
-        "product_data": {
-            "brand": "Sailun",
-            "model": "Ice Blazer WST3",
-            "width": "225",
-            "height": "65",
-            "diameter": "R17",
-            "load_index": "102",
-            "speed_index": "T",
-            "season": "зимняя"
-        },
-        "output_filename": "processed/test_season_icon_001_ai.jpg",
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S+03:00"),
-        "params": {
-            "font_bold": "uploads/ai_image/fonts/Inter-Bold.ttf",
-            "font_semibold": "uploads/ai_image/fonts/Inter-SemiBold.ttf",
-            "font_regular": "uploads/ai_image/fonts/Inter-Regular.ttf",
-            "color_white": "#FFFFFF",
-            "color_black": "#222222",
-            "color_cyan": "#349FCD",
-            "color_light_bg": "#FFFFFF",
-            "color_load_idx_bg": "#349FCD",
-            "color_speed_idx_bg": "#349FCD",
-            "width": 620,
-            "height": 826,
-            "logo_removal_method": "lama"
-        }
-    }
-    with open(TASKS_DIR / 'test_season_icon_001.json', 'w', encoding='utf-8') as f:
-        json.dump(test_task, f, ensure_ascii=False, indent=2)
-    print('Запуск подпроцесса:', [sys.executable, str(BASE / 'ai_image_processor.py'), '--task', str(TASKS_DIR / 'test_season_icon_001.json'), '--config', str(BASE / 'config.yaml'), '--debug'])
-    result = subprocess.run([
-        sys.executable, str(BASE / 'ai_image_processor.py'),
-        '--task', str(TASKS_DIR / 'test_season_icon_001.json'),
-        '--config', str(BASE / 'config.yaml'),
-        '--debug'
-    ], capture_output=True, text=True)
-    print(result.stdout)
-    if result.stderr:
-        print('--- STDERR ---')
-        print(result.stderr)
-    result_file = RESULTS_DIR / 'test_season_icon_001.json'
-    assert result_file.exists(), 'Результат не найден!'
-    with open(result_file, 'r', encoding='utf-8') as f:
-        result = json.load(f)
-    assert result['status'] == 'success', 'Статус задачи не success!'
-    out_img = PROCESSED_DIR / 'test_season_icon_001_ai.jpg'
-    assert out_img.exists(), 'Финальное изображение не найдено!'
-    print('Тест с иконкой сезонности успешно пройден! Проверьте визуально наличие иконки на итоговом изображении.')
 
 def mask_key(key):
     if not key or len(key) < 8:
@@ -295,7 +235,6 @@ def main():
     # Проверяем наличие ключа runwayml перед запуском теста
     check_runwayml_key()
     run_logo_removal_test('runwayml')
-    # test_season_icon()  # временно не запускаем
     
     # Проверка результата
     if check_result():

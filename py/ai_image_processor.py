@@ -67,10 +67,9 @@ TASK_SCHEMA = {
         "product_data": {"type": "object"},
         "original_image": {"type": "string"},
         "template": {"type": "string"},
-        "icon": {"type": "string"},
         "output_filename": {"type": "string"},
     },
-    "required": ["task_id", "product_data", "original_image", "template", "icon", "output_filename"]
+    "required": ["task_id", "product_data", "original_image", "template", "output_filename"]
 }
 
 # --- КОНСТАНТЫ ДЛЯ КОМПОНОВКИ ---
@@ -122,16 +121,19 @@ def get_font(size, font_path):
     import sys
     if font_path and os.path.exists(font_path):
         try:
-            logger.debug(f"Используется кастомный шрифт: {font_path}")
+            if args.debug:
+                logger.debug(f"Используется кастомный шрифт: {font_path}")
             return ImageFont.truetype(font_path, int(size))
         except Exception as e:
             logger.warning(f"Ошибка загрузки кастомного шрифта '{font_path}': {e}. Пробую системный fallback.")
     try:
         if sys.platform.startswith('win'):
-            logger.debug("Используется системный шрифт: arial.ttf (Windows)")
+            if args.debug:
+                logger.debug("Используется системный шрифт: arial.ttf (Windows)")
             return ImageFont.truetype("arial.ttf", int(size))
         else:
-            logger.debug("Используется системный шрифт: DejaVuSans.ttf (Linux/Mac)")
+            if args.debug:
+                logger.debug("Используется системный шрифт: DejaVuSans.ttf (Linux/Mac)")
             return ImageFont.truetype("DejaVuSans.ttf", int(size))
     except Exception as e:
         logger.warning(f"Ошибка загрузки системного шрифта: {e}. Используется ImageFont.load_default().")
@@ -173,7 +175,6 @@ def draw_specs(draw, main_text, rim_text, width, height, font_path_semibold, fon
     main_h = int(height * COEFF['specs_main_h'])
     main_text_x = int(main_w * COEFF['main_text_x'])
     main_text_y = int(height * COEFF['main_text_y'])
-    rect_coords = (specs_x - main_w//2, specs_y, specs_x + main_w//2, specs_y + main_h)
     bbox_main = main_font.getbbox(main_text) if hasattr(main_font, 'getbbox') else (0, 0, *main_font.getmask(main_text).size)
     block_w_main = bbox_main[2] - bbox_main[0]
     block_h_main = bbox_main[3] - bbox_main[1]
@@ -186,45 +187,25 @@ def draw_specs(draw, main_text, rim_text, width, height, font_path_semibold, fon
     if debug_logging:
         print(f'draw_specs: rim_text="{rim_text}", font_size={rim_font.size}, block_w={block_w_rim}, block_h={block_h_rim}')
         logger.debug(f'draw_specs: rim_text="{rim_text}", font_size={rim_font.size}, block_w={block_w_rim}, block_h={block_h_rim}')
-    if debug_logging:
-        print(f'draw_specs: main rect {rect_coords}')
-        logger.debug(f'draw_specs: main rect {rect_coords}')
-    # draw.rounded_rectangle(
-    #     rect_coords,
-    #     radius=int(height*0.03), fill=LIGHT_BG
-    # )
+    # main_text: левый край прямоугольника + отступ main_text_x
     draw.text(
         ((specs_x - main_w//2) + main_text_x, main_text_y),
         main_text, font=main_font, fill=BLACK, anchor='ls'
     )
+    # rim_text: центр прямоугольника rim_rect по X, main_text_y по Y (как в оригинале)
     rim_space = int(main_h * 0.0698)
     rim_x = (specs_x - main_w//2) + int(main_w * 0.6379)
     rim_x2 = (specs_x + main_w//2) - rim_space
-    rim_y = specs_y + rim_space
-    rim_y2 = (specs_y + main_h) - rim_space
-    rim_rect = (rim_x, rim_y, rim_x2, rim_y2)
-    if debug_logging:
-        print(f'draw_specs: rim rect {rim_rect}')
-        logger.debug(f'draw_specs: rim rect {rim_rect}')
-    print(f'draw_specs: rim_text="{rim_text}", x={rim_x + (rim_x2 - rim_x)//2}, y={rim_y + int((rim_y2 - rim_y) * 0.0746)}, font_size={rim_font.size}')
-    logger.debug(f'draw_specs: rim_text="{rim_text}", x={rim_x + (rim_x2 - rim_x)//2}, y={rim_y + int((rim_y2 - rim_y) * 0.0746)}, font_size={rim_font.size}')
-    #draw.rounded_rectangle(
-    #    rim_rect,
-    #    radius=int(height*0.027), fill=CYAN
-    #)
     rim_w = rim_x2 - rim_x
-    rim_h = rim_y2 - rim_y
     draw.text(
         (rim_x + rim_w//2, main_text_y),
         rim_text, font=rim_font, fill=WHITE, anchor='ms'
     )
 
-def draw_index_box(draw, value, text1, text2, width, height, bg_color, x, y, font_path_bold, font_path_regular, WHITE, debug_logging=False):
+def draw_index_box(draw, value, width, height, bg_color, x, y, font_path_bold, WHITE, debug_logging=False):
     box_w = int(width * COEFF['index_box_w'])
     box_h = int(height * COEFF['index_box_h'])
-    rect_coords = (x, y, x + box_w, y + box_h)
     num_font = get_font(int(width * 0.0629), font_path_bold)
-    text_font = get_font(int(width * 0.037), font_path_regular)
     cx = x + int(box_w * 0.0682)
     cy = y + int(box_h * 0.0526)
     bbox_val = num_font.getbbox(value) if hasattr(num_font, 'getbbox') else (0, 0, *num_font.getmask(value).size)
@@ -233,53 +214,7 @@ def draw_index_box(draw, value, text1, text2, width, height, bg_color, x, y, fon
     if debug_logging:
         print(f'draw_index_box: value="{value}", x={cx}, y={cy}, font_size={num_font.size}, block_w={block_w_val}, block_h={block_h_val}')
         logger.debug(f'draw_index_box: value="{value}", x={cx}, y={cy}, font_size={num_font.size}, block_w={block_w_val}, block_h={block_h_val}')
-    bbox_t1 = text_font.getbbox(text1) if hasattr(text_font, 'getbbox') else (0, 0, *text_font.getmask(text1).size)
-    block_w_t1 = bbox_t1[2] - bbox_t1[0]
-    block_h_t1 = bbox_t1[3] - bbox_t1[1]
-    if debug_logging:
-        print(f'draw_index_box: text1="{text1}", x={cx}, y={y + int(box_h * 0.4554)}, font_size={text_font.size}, block_w={block_w_t1}, block_h={block_h_t1}')
-        logger.debug(f'draw_index_box: text1="{text1}", x={cx}, y={y + int(box_h * 0.4554)}, font_size={text_font.size}, block_w={block_w_t1}, block_h={block_h_t1}')
-    bbox_t2 = text_font.getbbox(text2) if hasattr(text_font, 'getbbox') else (0, 0, *text_font.getmask(text2).size)
-    block_w_t2 = bbox_t2[2] - bbox_t2[0]
-    block_h_t2 = bbox_t2[3] - bbox_t2[1]
-    if debug_logging:
-        print(f'draw_index_box: text2="{text2}", x={cx}, y={y + int(box_h * 0.6883)}, font_size={text_font.size}, block_w={block_w_t2}, block_h={block_h_t2}')
-        logger.debug(f'draw_index_box: text2="{text2}", x={cx}, y={y + int(box_h * 0.6883)}, font_size={text_font.size}, block_w={block_w_t2}, block_h={block_h_t2}')
-    if debug_logging:
-        print(f'draw_index_box: rect {rect_coords}')
-        logger.debug(f'draw_index_box: rect {rect_coords}')
-    #draw.rounded_rectangle(rect_coords, radius=int(height*0.027), fill=bg_color)
     draw.text((cx, cy), value, font=num_font, fill=WHITE, anchor='lt')
-    #draw.text((cx, y + int(box_h * 0.4834)), text1, font=text_font, fill=WHITE, anchor='lt')
-    #draw.text((cx, y + int(box_h * 0.7255)), text2, font=text_font, fill=WHITE, anchor='lt')
-
-def draw_season(draw, season, icon_img, width, height, font_path_bold, WHITE, img=None, debug_logging=False):
-    font = get_font(int(width * COEFF['season_font']), font_path_bold)
-    x = int(width * COEFF['season_x'])
-    y = int(height * COEFF['season_y'])
-    y2 = int(height * COEFF['season_y2'])
-    line1 = "ЛЕТНЯЯ" if season.lower() == "летняя" else "ЗИМНЯЯ" if season.lower() == "зимняя" else "ЛЮБОЙ"
-    line2 = "РЕЗИНА" if season.lower() in ["летняя", "зимняя"] else "СЕЗОН"
-    bbox1 = font.getbbox(line1) if hasattr(font, 'getbbox') else (0, 0, *font.getmask(line1).size)
-    block_w1 = bbox1[2] - bbox1[0]
-    block_h1 = bbox1[3] - bbox1[1]
-    bbox2 = font.getbbox(line2) if hasattr(font, 'getbbox') else (0, 0, *font.getmask(line2).size)
-    block_w2 = bbox2[2] - bbox2[0]
-    block_h2 = bbox2[3] - bbox2[1]
-    if debug_logging:
-        print(f'draw_season: line1="{line1}", x={x}, y={y}, font_size={font.size}, block_w={block_w1}, block_h={block_h1}')
-        logger.debug(f'draw_season: line1="{line1}", x={x}, y={y}, font_size={font.size}, block_w={block_w1}, block_h={block_h1}')
-        print(f'draw_season: line2="{line2}", x={x}, y={y2}, font_size={font.size}, block_w={block_w2}, block_h={block_h2}')
-        logger.debug(f'draw_season: line2="{line2}", x={x}, y={y2}, font_size={font.size}, block_w={block_w2}, block_h={block_h2}')
-    draw.text((x, y), line1, font=font, fill=WHITE, anchor='lt')
-    draw.text((x, y2), line2, font=font, fill=WHITE, anchor='lt')
-    if icon_img and img is not None:
-        icon_w = int(width * 0.087)
-        icon_h = int(height * 0.0726)
-        icon_x = int(width * 0.267)
-        icon_y = int(height * 0.79)
-        icon_resized = icon_img.resize((icon_w, icon_h))
-        img.paste(icon_resized, (icon_x, icon_y), icon_resized)
 
 def draw_tire(img, tire_img, width, height):
     tire_width = int(width * COEFF['tire_w'])
@@ -325,8 +260,9 @@ def crop_to_content(img):
     x1 = min(w, x1 + 5)
     y1 = min(h, y1 + 5)
     
-    print(f'crop_to_content: crop box (x0={x0}, y0={y0}, x1={x1}, y1={y1})')
-    logger.debug(f'crop_to_content: crop box (x0={x0}, y0={y0}, x1={x1}, y1={y1})')
+    if args.debug:
+        print(f'crop_to_content: crop box (x0={x0}, y0={y0}, x1={x1}, y1={y1})')
+        logger.debug(f'crop_to_content: crop box (x0={x0}, y0={y0}, x1={x1}, y1={y1})')
     
     return img.crop((x0, y0, x1, y1))
 
@@ -667,6 +603,20 @@ def remove_logo_runwayml(img, prompt, api_key, debug_path_prefix=None):
             logger.error(f"[RunwayML] Тело ответа: {e.response.text}")
         raise RuntimeError(f"RunwayML API error: {e}")
 
+def mask_api_key(key: str) -> str:
+    if not key or len(key) < 8:
+        return '****'
+    return '*' * (len(key) - 4) + key[-4:]
+
+# --- настройка логирования с ротацией и отдельным errors.log ---
+def setup_logging(debug_mode=False):
+    from loguru import logger as loguru_logger
+    logger.remove()
+    log_level = 'DEBUG' if debug_mode else 'INFO'
+    loguru_logger.add(str(LOGS_DIR / 'processor.log'), rotation='1 week', retention='4 weeks', level=log_level)
+    loguru_logger.add(str(LOGS_DIR / 'errors.log'), rotation='1 week', retention='4 weeks', level='ERROR')
+    return loguru_logger
+
 # --- Основная функция обработки ---
 def process_image(task):
     """
@@ -686,7 +636,6 @@ def process_image(task):
         # Пути к файлам
         orig_path = ORIGINALS_DIR / Path(task['original_image']).name
         background_path = TEMPLATES_DIR / Path(task['template']).name
-        icon_path = LOGOS_DIR / Path(task.get('icon', 'icon.png')).name
         output_path = PROCESSED_DIR / Path(task['output_filename']).name
         FONT_PATH_BOLD = resolve_font_path(get_param('font_bold', 'Inter-Bold.ttf'))
         FONT_PATH_SEMIBOLD = resolve_font_path(get_param('font_semibold', 'Inter-SemiBold.ttf'))
@@ -702,11 +651,6 @@ def process_image(task):
             if p and not os.path.exists(p):
                 logger.error(f"Файл {label} не найден: {p}")
                 return None
-        if icon_path and not os.path.exists(icon_path):
-            logger.warning(f"Иконка не найдена: {icon_path}")
-            icon_img = None
-        else:
-            icon_img = Image.open(icon_path).convert('RGBA') if icon_path else None
         # Цвета
         WHITE = get_param('color_white', '#FFFFFF')
         BLACK = get_param('color_black', '#222222')
@@ -787,10 +731,10 @@ def process_image(task):
         draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width_ss, height_ss, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width, height, LOAD_IDX_BG, int(width*COEFF['season_x']), int(height*0.4521), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
-        draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width_ss, height_ss, LOAD_IDX_BG, int(width_ss*COEFF['season_x']), int(height_ss*0.4521), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+        draw_index_box(draw, LOAD_IDX, width_ss, height_ss, LOAD_IDX_BG, int(width_ss*COEFF['season_x']), int(height_ss*0.4521), FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width, height, SPEED_IDX_BG, int(width*COEFF['season_x']), int(height*0.628), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
-        draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width_ss, height_ss, SPEED_IDX_BG, int(width_ss*COEFF['season_x']), int(height_ss*0.628), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+        draw_index_box(draw, SPEED_IDX, width_ss, height_ss, SPEED_IDX_BG, int(width_ss*COEFF['season_x']), int(height_ss*0.628), FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # --- SUPER SAMPLING: Уменьшаем изображение до целевого размера ---
         # Сначала применим постобработку для повышения резкости и коррекции цвета (до ресайза)
@@ -883,10 +827,5 @@ def main():
 
 if __name__ == '__main__':
     debug = args.debug
-    if debug:
-        logger.remove()
-        logger.add(str(LOGS_DIR / 'processor.log'), level='DEBUG')
-    else:
-        logger.remove()
-        logger.add(str(LOGS_DIR / 'processor.log'), level='INFO')
+    logger = setup_logging(debug)
     main()

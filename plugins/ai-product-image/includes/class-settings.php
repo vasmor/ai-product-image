@@ -42,9 +42,6 @@ class AI_Product_Image_Settings {
         register_setting( 'ai_image_settings', 'ai_image_background_summer' );
         register_setting( 'ai_image_settings', 'ai_image_background_winter' );
         register_setting( 'ai_image_settings', 'ai_image_background_allseason' );
-        register_setting( 'ai_image_settings', 'ai_image_icon_summer' );
-        register_setting( 'ai_image_settings', 'ai_image_icon_winter' );
-        register_setting( 'ai_image_settings', 'ai_image_icon_any' );
         register_setting( 'ai_image_settings', 'ai_image_font_bold' );
         register_setting( 'ai_image_settings', 'ai_image_font_semibold' );
         register_setting( 'ai_image_settings', 'ai_image_font_regular' );
