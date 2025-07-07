@@ -167,7 +167,7 @@ def draw_model(draw, text, width, height, font_path_semibold, WHITE, debug_loggi
         logger.debug(f'draw_model: text="{text}", x={x}, y={y}, font_size={font_size}, block_w={block_w}, block_h={block_h}')
     draw.text((x, y), text, font=font, fill=WHITE, anchor='mt')
 
-def draw_specs(draw, main_text, rim_text, width, height, font_path_semibold, font_path_bold, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging=False):
+def draw_specs(draw, main_text, rim_text, width, height, font_path_semibold, font_path_bold, BLACK, WHITE, debug_logging=False):
     main_font = get_font(int(width * COEFF['specs_main_font']), font_path_semibold)
     rim_font = get_font(int(width * COEFF['specs_rim_font']), font_path_bold)
     specs_x = int(width * COEFF['specs_x'])
@@ -655,10 +655,6 @@ def process_image(task):
         # Цвета
         WHITE = get_param('color_white', '#FFFFFF')
         BLACK = get_param('color_black', '#222222')
-        CYAN = get_param('color_cyan', '#349FCD')
-        LIGHT_BG = get_param('color_light_bg', '#FFFFFF')
-        LOAD_IDX_BG = get_param('color_load_idx_bg', '#349FCD')
-        SPEED_IDX_BG = get_param('color_speed_idx_bg', '#349FCD')
         # Данные товара
         pd = task['product_data']
         BRAND = pd.get('brand', '')
@@ -729,13 +725,13 @@ def process_image(task):
         draw_model(draw, MODEL, width_ss, height_ss, FONT_PATH_SEMIBOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width, height, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging)
-        draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width_ss, height_ss, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+        draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width_ss, height_ss, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width, height, LOAD_IDX_BG, int(width*COEFF['season_x']), int(height*0.4521), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
-        draw_index_box(draw, LOAD_IDX, width_ss, height_ss, LOAD_IDX_BG, int(width_ss*COEFF['season_x']), int(height_ss*0.4521), FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+        draw_index_box(draw, LOAD_IDX, width_ss, height_ss, int(width_ss*COEFF['season_x']), int(height_ss*0.4521), FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width, height, SPEED_IDX_BG, int(width*COEFF['season_x']), int(height*0.628), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
-        draw_index_box(draw, SPEED_IDX, width_ss, height_ss, SPEED_IDX_BG, int(width_ss*COEFF['season_x']), int(height_ss*0.628), FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+        draw_index_box(draw, SPEED_IDX, width_ss, height_ss, int(width_ss*COEFF['season_x']), int(height_ss*0.628), FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # --- SUPER SAMPLING: Уменьшаем изображение до целевого размера ---
         # Сначала применим постобработку для повышения резкости и коррекции цвета (до ресайза)

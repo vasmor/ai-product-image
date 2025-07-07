@@ -145,11 +145,20 @@ class AI_Product_Image_Task_Manager {
         $output_filename = 'processed/product_' . $product_id . '_ai.png';
         $task_id = date('Ymd_His') . '_' . $product_id;
         $debug_logging = get_option('ai_image_debug_logging', 0);
+        // Определяем файл шаблона по сезону
+        $season_lc = mb_strtolower(trim($season));
+        if ($season_lc === 'зимняя') {
+            $template_file = 'background_winter.jpg';
+        } elseif ($season_lc === 'летняя') {
+            $template_file = 'background_summer.jpg';
+        } else {
+            $template_file = 'background_allseason.jpg';
+        }
         $task = [
             'task_id' => $task_id,
             'type' => 'tyre',
             'original_image' => 'originals/' . basename($image_path),
-            'template' => 'templates/' . basename(get_attached_file($background)),
+            'template' => 'templates/' . $template_file,
             'product_data' => [
                 'brand' => $brand,
                 'model' => $model,
@@ -168,10 +177,6 @@ class AI_Product_Image_Task_Manager {
                 'font_regular' => self::resolve_font_path(get_option('ai_image_font_regular')),
                 'color_white' => get_option('ai_image_color_white'),
                 'color_black' => get_option('ai_image_color_black'),
-                'color_cyan' => get_option('ai_image_color_cyan'),
-                'color_light_bg' => get_option('ai_image_color_light_bg'),
-                'color_load_idx_bg' => get_option('ai_image_color_load_idx_bg'),
-                'color_speed_idx_bg' => get_option('ai_image_color_speed_idx_bg'),
                 'width' => get_option('ai_image_width', 620),
                 'height' => get_option('ai_image_height', 826),
                 'logo_removal_method' => 'runwayml',

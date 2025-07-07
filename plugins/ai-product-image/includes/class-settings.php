@@ -1,4 +1,8 @@
 <?php
+if ( ! function_exists( 'ai_product_image_admin_page' ) ) {
+    require_once AI_PRODUCT_IMAGE_PATH . 'admin/admin-page.php';
+}
+
 /**
  * Класс для управления настройками и страницей админки
  *
@@ -19,6 +23,9 @@ class AI_Product_Image_Settings {
     public function __construct() {
         add_action( 'admin_menu', [ $this, 'register_admin_page' ] );
         add_action( 'admin_init', [ $this, 'register_settings' ] );
+        add_action( 'update_option_ai_image_background_summer', [ $this, 'copy_template_image' ], 10, 2 );
+        add_action( 'update_option_ai_image_background_winter', [ $this, 'copy_template_image' ], 10, 2 );
+        add_action( 'update_option_ai_image_background_allseason', [ $this, 'copy_template_image' ], 10, 2 );
         add_action( 'update_option_ai_image_cron_enabled', [ $this, 'reschedule_cron' ], 10, 2 );
         add_action( 'update_option_ai_image_cron_time', [ $this, 'reschedule_cron' ], 10, 2 );
     }
@@ -47,10 +54,6 @@ class AI_Product_Image_Settings {
         register_setting( 'ai_image_settings', 'ai_image_font_regular' );
         register_setting( 'ai_image_settings', 'ai_image_color_white' );
         register_setting( 'ai_image_settings', 'ai_image_color_black' );
-        register_setting( 'ai_image_settings', 'ai_image_color_cyan' );
-        register_setting( 'ai_image_settings', 'ai_image_color_light_bg' );
-        register_setting( 'ai_image_settings', 'ai_image_color_load_idx_bg' );
-        register_setting( 'ai_image_settings', 'ai_image_color_speed_idx_bg' );
         register_setting( 'ai_image_settings', 'ai_image_width' );
         register_setting( 'ai_image_settings', 'ai_image_height' );
         register_setting( 'ai_image_settings', 'ai_image_cron_enabled' );
@@ -69,5 +72,29 @@ class AI_Product_Image_Settings {
             $cron = new AI_Product_Image_Cron();
             $cron->maybe_reschedule_cron();
         }
+    }
+
+    /**
+     * Копирует выбранный шаблон в папку templates с уникальным именем по сезону
+     */
+    public function copy_template_image($old_value, $new_value) {
+        $option_to_season = [
+            'ai_image_background_summer' => 'summer',
+            'ai_image_background_winter' => 'winter',
+            'ai_image_background_allseason' => 'allseason',
+        ];
+        // Определяем, для какого сезона вызван хук
+        $option = current_filter();
+        $option = str_replace('update_option_', '', $option);
+        $season = $option_to_season[$option] ?? '';
+        if (!$season || !$new_value) return;
+        $src = get_attached_file($new_value);
+        if (!$src || !file_exists($src)) return;
+        $upload_dir = wp_upload_dir();
+        $dest_dir = trailingslashit($upload_dir['basedir']) . 'ai_image/templates/';
+        if (!is_dir($dest_dir)) wp_mkdir_p($dest_dir);
+        $ext = pathinfo($src, PATHINFO_EXTENSION);
+        $dest = $dest_dir . 'background_' . $season . '.' . $ext;
+        copy($src, $dest);
     }
 } 

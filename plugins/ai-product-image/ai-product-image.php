@@ -21,6 +21,8 @@ if ( ! defined( 'AI_PRODUCT_IMAGE_URL' ) ) {
     define( 'AI_PRODUCT_IMAGE_URL', plugin_dir_url( __FILE__ ) );
 }
 
+require_once AI_PRODUCT_IMAGE_PATH . 'includes/class-plugin.php';
+
 // Автозагрузка классов
 spl_autoload_register( function ( $class ) {
     if ( strpos( $class, 'AI_Product_Image_' ) === 0 ) {
@@ -36,4 +38,22 @@ add_action( 'plugins_loaded', function() {
     if ( class_exists( 'AI_Product_Image_Plugin' ) ) {
         AI_Product_Image_Plugin::get_instance();
     }
-} ); 
+} );
+
+add_filter('upload_mimes', function($mimes){
+    $mimes['ttf'] = 'font/ttf';
+    $mimes['otf'] = 'font/otf';
+    $mimes['woff'] = 'font/woff';
+    $mimes['woff2'] = 'font/woff2';
+    return $mimes;
+});
+
+add_filter('wp_check_filetype_and_ext', function($data, $file, $filename, $mimes) {
+    $ext = pathinfo($filename, PATHINFO_EXTENSION);
+    if (in_array($ext, ['ttf', 'otf', 'woff', 'woff2'])) {
+        $data['ext'] = $ext;
+        $data['type'] = 'font/' . $ext;
+        $data['proper_filename'] = $filename;
+    }
+    return $data;
+}, 10, 4); 

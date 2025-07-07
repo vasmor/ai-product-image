@@ -16,6 +16,7 @@ function ai_product_image_admin_page() {
     if ( ! current_user_can('manage_options') ) {
         wp_die('Недостаточно прав для доступа к этой странице.');
     }
+    wp_enqueue_media();
 
     $task_manager = new AI_Product_Image_Task_Manager();
     // Автоматически обработать результаты при открытии очереди
@@ -203,20 +204,48 @@ function ai_product_image_admin_page() {
             <?php settings_fields('ai_image_settings'); ?>
             <table class="form-table">
                 <tr><th colspan="2"><b>Фоны</b></th></tr>
-                <tr><th>Летние шины</th><td><?php echo wp_get_attachment_image( get_option('ai_image_background_summer'), 'medium' ); ?><br><?php echo wp_media_input('ai_image_background_summer'); ?></td></tr>
-                <tr><th>Зимние шины</th><td><?php echo wp_get_attachment_image( get_option('ai_image_background_winter'), 'medium' ); ?><br><?php echo wp_media_input('ai_image_background_winter'); ?></td></tr>
-                <tr><th>Всесезонные шины</th><td><?php echo wp_get_attachment_image( get_option('ai_image_background_allseason'), 'medium' ); ?><br><?php echo wp_media_input('ai_image_background_allseason'); ?></td></tr>
+                <?php
+                $backgrounds = [
+                    'ai_image_background_summer' => 'Летние шины',
+                    'ai_image_background_winter' => 'Зимние шины',
+                    'ai_image_background_allseason' => 'Всесезонные шины',
+                ];
+                foreach ($backgrounds as $opt => $label) {
+                    $id = get_option($opt);
+                    $img = $id ? wp_get_attachment_image($id, 'medium') : '';
+                    $val = esc_attr($id);
+                    echo "<tr><th>{$label}</th><td>";
+                    echo "<input type='hidden' name='{$opt}' id='{$opt}' value='{$val}'>";
+                    echo "<button type='button' class='button ai-image-media-upload' data-target='{$opt}'>Выбрать/Загрузить</button> ";
+                    echo "<span class='ai-image-media-preview' id='{$opt}_preview'>{$img}</span>";
+                    echo "</td></tr>";
+                }
+                ?>
                 <tr><th colspan="2"><b>Логотип и шрифты</b></th></tr>
-                <tr><th>Inter-Bold.ttf</th><td><?php echo wp_media_input('ai_image_font_bold'); ?></td></tr>
-                <tr><th>Inter-SemiBold.ttf</th><td><?php echo wp_media_input('ai_image_font_semibold'); ?></td></tr>
-                <tr><th>Inter-Regular.ttf</th><td><?php echo wp_media_input('ai_image_font_regular'); ?></td></tr>
+                <?php
+                $fonts = [
+                    'ai_image_font_bold' => 'Inter-Bold.ttf',
+                    'ai_image_font_semibold' => 'Inter-SemiBold.ttf',
+                    'ai_image_font_regular' => 'Inter-Regular.ttf',
+                ];
+                foreach ($fonts as $opt => $label) {
+                    $id = get_option($opt);
+                    $val = esc_attr($id);
+                    $file = '';
+                    if ($id) {
+                        $url = wp_get_attachment_url($id);
+                        $file = $url ? basename($url) : '';
+                    }
+                    echo "<tr><th>{$label}</th><td>";
+                    echo "<input type='hidden' name='{$opt}' id='{$opt}' value='{$val}'>";
+                    echo "<button type='button' class='button ai-image-media-upload' data-target='{$opt}'>Выбрать/Загрузить</button> ";
+                    echo "<span class='ai-image-media-preview' id='{$opt}_preview'>{$file}</span>";
+                    echo "</td></tr>";
+                }
+                ?>
                 <tr><th colspan="2"><b>Цвета и размеры</b></th></tr>
                 <tr><th>WHITE</th><td><input type="text" name="ai_image_color_white" value="<?php echo esc_attr(get_option('ai_image_color_white', '#FFFFFF')); ?>" class="regular-text"></td></tr>
                 <tr><th>BLACK</th><td><input type="text" name="ai_image_color_black" value="<?php echo esc_attr(get_option('ai_image_color_black', '#222222')); ?>" class="regular-text"></td></tr>
-                <tr><th>CYAN</th><td><input type="text" name="ai_image_color_cyan" value="<?php echo esc_attr(get_option('ai_image_color_cyan', '#23B2AA')); ?>" class="regular-text"></td></tr>
-                <tr><th>LIGHT_BG</th><td><input type="text" name="ai_image_color_light_bg" value="<?php echo esc_attr(get_option('ai_image_color_light_bg', '#F3F6F7')); ?>" class="regular-text"></td></tr>
-                <tr><th>LOAD_IDX_BG</th><td><input type="text" name="ai_image_color_load_idx_bg" value="<?php echo esc_attr(get_option('ai_image_color_load_idx_bg', '#30BBC2')); ?>" class="regular-text"></td></tr>
-                <tr><th>SPEED_IDX_BG</th><td><input type="text" name="ai_image_color_speed_idx_bg" value="<?php echo esc_attr(get_option('ai_image_color_speed_idx_bg', '#357D9F')); ?>" class="regular-text"></td></tr>
                 <tr><th>Ширина (px)</th><td><input type="number" name="ai_image_width" value="<?php echo esc_attr(get_option('ai_image_width', 620)); ?>" class="small-text"></td></tr>
                 <tr><th>Высота (px)</th><td><input type="number" name="ai_image_height" value="<?php echo esc_attr(get_option('ai_image_height', 826)); ?>" class="small-text"></td></tr>
                 <tr><th colspan="2"><b>Крон и автоматизация</b></th></tr>
@@ -274,6 +303,30 @@ function ai_product_image_admin_page() {
             </table>
             <?php submit_button(); ?>
         </form>
+        <script>
+        jQuery(document).ready(function($){
+            $('.ai-image-media-upload').on('click', function(e){
+                e.preventDefault();
+                var button = $(this);
+                var target = button.data('target');
+                var custom_uploader = wp.media({
+                    title: 'Выберите файл',
+                    button: { text: 'Использовать' },
+                    multiple: false
+                })
+                .on('select', function() {
+                    var attachment = custom_uploader.state().get('selection').first().toJSON();
+                    $('#' + target).val(attachment.id);
+                    if(attachment.type === 'image') {
+                        $('#' + target + '_preview').html('<img src="' + (attachment.sizes.medium ? attachment.sizes.medium.url : attachment.url) + '" style="max-width:200px;">');
+                    } else {
+                        $('#' + target + '_preview').text(attachment.filename);
+                    }
+                })
+                .open();
+            });
+        });
+        </script>
         <?php
         return;
     }
