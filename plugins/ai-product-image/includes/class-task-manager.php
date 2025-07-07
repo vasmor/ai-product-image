@@ -120,6 +120,15 @@ class AI_Product_Image_Task_Manager {
      * @return bool
      */
     public function create_task_for_product( $product_id, $settings = [] ) {
+        // Контроль статуса: не создавать задачу, если статус не error и не пустой
+        if ( ! class_exists('AI_Product_Image_Product_Helper') ) {
+            require_once dirname(__FILE__) . '/class-product-helper.php';
+        }
+        $status = AI_Product_Image_Product_Helper::get_status($product_id);
+        if ( $status && $status !== 'error' ) {
+            // Задача уже в работе или завершена, не создаём новую
+            return false;
+        }
         $product = wc_get_product($product_id);
         if (!$product) return false;
         $brand = $product->get_attribute('pa_brend');
@@ -175,7 +184,11 @@ class AI_Product_Image_Task_Manager {
         // Сохраняем задачу в tasks/
         $file = $this->tasks_dir . $task_id . '.json';
         $json = json_encode($task, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
-        return file_put_contents($file, $json) !== false;
+        $result = file_put_contents($file, $json) !== false;
+        if ($result) {
+            AI_Product_Image_Product_Helper::set_status($product_id, 'task_created');
+        }
+        return $result;
     }
 
     /**
@@ -186,16 +199,35 @@ class AI_Product_Image_Task_Manager {
         $count = 0;
         $upload_dir = wp_upload_dir();
         $results_dir = trailingslashit( $upload_dir['basedir'] ) . 'ai_image/results/';
+        if ( ! class_exists('AI_Product_Image_Product_Helper') ) {
+            require_once dirname(__FILE__) . '/class-product-helper.php';
+        }
         foreach (glob($results_dir . '*.json') as $file) {
             $json = file_get_contents($file);
             $data = json_decode($json, true);
-            if (!$data || $data['status'] !== 'success') continue;
-            // task_id вида 20240610_12345_6789, где 12345 — ID товара
+            if (!$data || empty($data['task_id'])) continue;
             if (preg_match('/_(\d+)$/', $data['task_id'], $m)) {
                 $product_id = intval($m[1]);
                 if ($product_id && get_post_type($product_id) === 'product') {
-                    update_post_meta($product_id, '_ai_image_processed', $data['task_id']);
-                    $count++;
+                    if ($data['status'] === 'success') {
+                        update_post_meta($product_id, '_ai_image_processed', $data['task_id']);
+                        $applied = false;
+                        if (!empty($data['output_image'])) {
+                            $processed_path = trailingslashit($upload_dir['basedir']) . 'ai_image/' . $data['output_image'];
+                            $applied = AI_Product_Image_Product_Helper::apply_processed_image_to_product($product_id, $processed_path);
+                        }
+                        if ($applied) {
+                            AI_Product_Image_Product_Helper::set_status($product_id, 'applied');
+                        } else {
+                            AI_Product_Image_Product_Helper::set_status($product_id, 'error');
+                        }
+                        AI_Product_Image_Product_Helper::set_error($product_id, '');
+                        $count++;
+                    } else {
+                        AI_Product_Image_Product_Helper::set_status($product_id, 'error');
+                        $err = !empty($data['error']) ? $data['error'] : 'Ошибка обработки';
+                        AI_Product_Image_Product_Helper::set_error($product_id, $err);
+                    }
                 }
             }
         }
@@ -214,5 +246,24 @@ class AI_Product_Image_Task_Manager {
             return $url ?: '';
         }
         return $val ?: '';
+    }
+
+    /**
+     * Установить статус 'processing' для товара по task_id
+     * @param string $task_id
+     * @return bool
+     */
+    public function set_processing_status_by_task_id($task_id) {
+        if ( ! class_exists('AI_Product_Image_Product_Helper') ) {
+            require_once dirname(__FILE__) . '/class-product-helper.php';
+        }
+        if (preg_match('/_(\d+)$/', $task_id, $m)) {
+            $product_id = intval($m[1]);
+            if ($product_id && get_post_type($product_id) === 'product') {
+                AI_Product_Image_Product_Helper::set_status($product_id, 'processing');
+                return true;
+            }
+        }
+        return false;
     }
 } 

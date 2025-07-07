@@ -12,4 +12,6 @@ max_image_size: 4096
 log_level: INFO
 font_bold: uploads/ai_image/fonts/Inter-Bold.ttf
 font_semibold: uploads/ai_image/fonts/Inter-SemiBold.ttf
-font_regular: uploads/ai_image/fonts/Inter-Regular.ttf 
+font_regular: uploads/ai_image/fonts/Inter-Regular.ttf
+wp_api_url: "https://your-site.com/wp-json/ai-image/v1/set-processing"
+wp_api_secret: "your_secret_key" 

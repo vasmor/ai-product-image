@@ -57,7 +57,8 @@ BATCH_SIZE = config.get('batch_size', 10)
 
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-logger.add(str(LOGS_DIR / 'processor.log'), rotation='1 week', retention='4 weeks', level=config.get('log_level', 'INFO'))
+# Настройка ротации логов: rotation='10 MB', retention=5, level=config.get('log_level', 'INFO')
+logger.add(str(LOGS_DIR / 'processor.log'), rotation='10 MB', retention=5, level=config.get('log_level', 'INFO'))
 
 # Пример схемы задачи
 TASK_SCHEMA = {
@@ -786,12 +787,29 @@ def process_image(task):
         logger.error(f"[PROCESS] Ошибка обработки изображения: {e}")
         return None
 
+def notify_wp_processing(task_id, config):
+    url = config.get('wp_api_url')
+    secret = config.get('wp_api_secret')
+    if not url or not secret:
+        logger.warning('WP API url/secret не заданы в config.yaml')
+        return
+    try:
+        resp = requests.post(url, json={'task_id': task_id, 'secret': secret}, timeout=5)
+        if resp.status_code == 200:
+            logger.info(f'[WP] Статус processing успешно отправлен для {task_id}')
+        else:
+            logger.warning(f'[WP] Не удалось обновить статус для {task_id}: {resp.status_code} {resp.text}')
+    except Exception as e:
+        logger.error(f'[WP] Ошибка при отправке статуса processing: {e}')
+
 def process_task(task_path):
     try:
         with open(task_path, 'r', encoding='utf-8') as f:
             task = json.load(f)
         ok, err = validate_task_json(task)
         task_id = task.get('task_id', task_path.stem)
+        # --- Уведомление WordPress о начале обработки ---
+        notify_wp_processing(task_id, config)
         if not ok:
             logger.error(f'Ошибка валидации задачи {task_id}: {err}')
             return

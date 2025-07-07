@@ -4,6 +4,16 @@ import argparse
 from pathlib import Path
 import time
 
+# Папки для очистки
+CLEANUP_DIRS = [
+    '../uploads/ai_image/temp',
+    '../uploads/ai_image/archive',
+    '../uploads/ai_image/logs',
+    # '../uploads/ai_image/processed',  # если нужно
+    # '../uploads/ai_image/results',    # если нужно
+]
+DAYS_TO_KEEP = 7  # Сколько дней хранить файлы
+
 def cleanup_test_files(processed_dir):
     count = 0
     for f in Path(processed_dir).glob('test_*'):
@@ -39,6 +49,18 @@ def cleanup_tasks_and_results(tasks_dir, results_dir, days=7):
                 f.unlink()
                 print(f'[CLEANUP] Удалён старый файл: {f}')
 
+def cleanup_dir(path, days):
+    now = time.time()
+    for fname in os.listdir(path):
+        fpath = os.path.join(path, fname)
+        if os.path.isfile(fpath):
+            if now - os.path.getmtime(fpath) > days * 86400:
+                try:
+                    os.remove(fpath)
+                    print(f"Удалён файл: {fpath}")
+                except Exception as e:
+                    print(f"Ошибка при удалении {fpath}: {e}")
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--processed', type=str, required=True)
@@ -59,4 +81,7 @@ def main():
         cleanup_tasks_and_results(args.tasks, args.results)
 
 if __name__ == '__main__':
+    for d in CLEANUP_DIRS:
+        if os.path.isdir(d):
+            cleanup_dir(d, DAYS_TO_KEEP)
     main() 

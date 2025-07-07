@@ -53,15 +53,42 @@ class AI_Product_Image_Cron {
     }
 
     /**
-     * Обработка batch задач (и результатов)
+     * Обработка batch задач (и результатов) + контроль зависших задач
      */
     public function process_tasks_batch() {
-        // Здесь будет логика запуска обработки batch задач (например, запуск Python-скрипта)
-        // Для теста можно просто логировать вызов
         error_log( '[AI Product Image] Запущена обработка batch задач через cron: ' . date('Y-m-d H:i:s') );
-        // Обновить мета-поля обработанных товаров
         require_once AI_PRODUCT_IMAGE_PATH . 'includes/class-task-manager.php';
+        require_once AI_PRODUCT_IMAGE_PATH . 'includes/class-product-helper.php';
         $tm = new AI_Product_Image_Task_Manager();
+        // 1. Контроль зависших задач (processing > 30 мин)
+        $now = time();
+        $tasks = $tm->get_tasks();
+        foreach ($tasks as $task) {
+            $task_id = $task['task_id'] ?? '';
+            if (!$task_id) continue;
+            if (preg_match('/_(\d+)$/', $task_id, $m)) {
+                $pid = intval($m[1]);
+                $status = AI_Product_Image_Product_Helper::get_status($pid);
+                if ($status === 'processing') {
+                    $created = strtotime($task['created_at'] ?? '');
+                    if ($created && ($now - $created > 1800)) { // 30 минут
+                        AI_Product_Image_Product_Helper::set_status($pid, 'error');
+                        AI_Product_Image_Product_Helper::set_error($pid, 'Задача зависла (таймаут)');
+                    }
+                }
+            }
+        }
+        // 2. Запуск задач для queued/error
+        $category_id = intval(get_option('ai_image_cron_category_id', 14834));
+        $limit = intval(get_option('ai_image_cron_limit', 1000));
+        $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $limit);
+        foreach ($product_ids as $pid) {
+            $status = AI_Product_Image_Product_Helper::get_status($pid);
+            if (in_array($status, ['queued','error'])) {
+                $tm->create_task_for_product($pid);
+            }
+        }
+        // 3. Обновить мета-поля обработанных товаров
         $updated = $tm->process_results();
         if ($updated > 0) {
             error_log('[AI Product Image] Обновлено товаров после AI-обработки (cron): ' . $updated);

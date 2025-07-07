@@ -47,12 +47,37 @@ function ai_product_image_admin_page() {
         $tasks = $task_manager->get_tasks();
     }
 
+    // Обработка сброса статуса
+    if (isset($_POST['reset_status_product_id']) && check_admin_referer('ai_image_reset_status_action', 'ai_image_reset_status_nonce')) {
+        $pid = intval($_POST['reset_status_product_id']);
+        if ($pid) {
+            AI_Product_Image_Product_Helper::reset_status($pid);
+            echo '<div class="notice notice-success"><p>Статус товара #' . $pid . ' сброшен.</p></div>';
+        }
+    }
+
+    // Обработка повторной обработки
+    if (isset($_POST['repeat_process_product_id']) && check_admin_referer('ai_image_repeat_process_action', 'ai_image_repeat_process_nonce')) {
+        $pid = intval($_POST['repeat_process_product_id']);
+        if ($pid) {
+            AI_Product_Image_Product_Helper::set_status($pid, 'queued');
+            $tm = new AI_Product_Image_Task_Manager();
+            $ok = $tm->create_task_for_product($pid);
+            if ($ok) {
+                echo '<div class="notice notice-success"><p>Задача на повторную обработку товара #' . $pid . ' создана!</p></div>';
+            } else {
+                echo '<div class="notice notice-error"><p>Ошибка создания задачи для товара #' . $pid . '.</p></div>';
+            }
+        }
+    }
+
     $tab = isset($_GET['tab']) ? $_GET['tab'] : 'tasks';
     echo '<h2 class="nav-tab-wrapper">';
     echo '<a href="?page=ai-product-image&tab=tasks" class="nav-tab' . ($tab=='tasks'?' nav-tab-active':'') . '">Очередь</a>';
     echo '<a href="?page=ai-product-image&tab=single" class="nav-tab' . ($tab=='single'?' nav-tab-active':'') . '">Одиночная обработка</a>';
     echo '<a href="?page=ai-product-image&tab=mass" class="nav-tab' . ($tab=='mass'?' nav-tab-active':'') . '">Массовая обработка</a>';
     echo '<a href="?page=ai-product-image&tab=settings" class="nav-tab' . ($tab=='settings'?' nav-tab-active':'') . '">Настройки</a>';
+    echo '<a href="?page=ai-product-image&tab=dashboard" class="nav-tab' . ($tab=='dashboard'?' nav-tab-active':'') . '">Мониторинг</a>';
     echo '</h2>';
 
     if ($tab === 'single') {
@@ -106,26 +131,21 @@ function ai_product_image_admin_page() {
     }
     if ($tab === 'mass') {
         $mass_msg = '';
+        $selected_statuses = isset($_POST['mass_status']) && is_array($_POST['mass_status']) ? array_map('sanitize_text_field', $_POST['mass_status']) : ['queued','error'];
+        $category_id = isset($_POST['mass_category_id']) ? intval($_POST['mass_category_id']) : '';
+        $mass_limit = isset($_POST['mass_limit']) ? intval($_POST['mass_limit']) : 100;
         if (isset($_POST['mass_start'])) {
             if (get_transient('ai_image_processing_lock')) {
                 $mass_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
             } else {
-                $limit = max(1, intval($_POST['mass_limit']));
-                $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree(14834, $limit);
-                $to_process = [];
-                foreach ($product_ids as $pid) {
-                    $already_processed = get_post_meta($pid, '_ai_image_processed', true);
-                    if (!$already_processed) {
-                        $to_process[] = $pid;
-                    }
-                }
-                if (empty($to_process)) {
+                $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit);
+                if (empty($product_ids)) {
                     $mass_msg = '<div class="notice notice-warning"><p>Нет товаров для обработки по выбранному фильтру.</p></div>';
                 } else {
                     set_transient('ai_image_processing_lock', 1, 60*30);
                     $tm = new AI_Product_Image_Task_Manager();
                     $created = 0;
-                    foreach ($to_process as $pid) {
+                    foreach ($product_ids as $pid) {
                         if ($tm->create_task_for_product($pid)) {
                             $created++;
                         }
@@ -145,8 +165,23 @@ function ai_product_image_admin_page() {
         <form method="post">
             <table class="form-table">
                 <tr>
+                    <th>ID категории товаров</th>
+                    <td><input type="number" name="mass_category_id" value="<?php echo esc_attr($category_id); ?>" min="1" class="small-text"> (товар должен входить в эту категорию или её дочерние)</td>
+                </tr>
+                <tr>
                     <th>Лимит товаров на обработку</th>
-                    <td><input type="number" name="mass_limit" value="100" min="1" class="small-text"> (максимум товаров за запуск)</td>
+                    <td><input type="number" name="mass_limit" value="<?php echo esc_attr($mass_limit); ?>" min="1" class="small-text"> (максимум товаров за запуск)</td>
+                </tr>
+                <tr>
+                    <th>Статусы для массовой обработки</th>
+                    <td>
+                        <label><input type="checkbox" name="mass_status[]" value="queued" <?php checked(in_array('queued', $selected_statuses)); ?>> queued</label>
+                        <label><input type="checkbox" name="mass_status[]" value="error" <?php checked(in_array('error', $selected_statuses)); ?>> error</label>
+                        <label><input type="checkbox" name="mass_status[]" value="task_created" <?php checked(in_array('task_created', $selected_statuses)); ?>> task_created</label>
+                        <label><input type="checkbox" name="mass_status[]" value="processing" <?php checked(in_array('processing', $selected_statuses)); ?>> processing</label>
+                        <label><input type="checkbox" name="mass_status[]" value="processed" <?php checked(in_array('processed', $selected_statuses)); ?>> processed</label>
+                        <label><input type="checkbox" name="mass_status[]" value="applied" <?php checked(in_array('applied', $selected_statuses)); ?>> applied</label>
+                    </td>
                 </tr>
             </table>
             <p>
@@ -193,6 +228,14 @@ function ai_product_image_admin_page() {
                     <th>Время/интервал (минуты)</th>
                     <td><input type="number" name="ai_image_cron_time" value="<?php echo esc_attr(get_option('ai_image_cron_time', 15)); ?>" class="small-text"></td>
                 </tr>
+                <tr>
+                    <th>ID категории для крон-обработки</th>
+                    <td><input type="number" name="ai_image_cron_category_id" value="<?php echo esc_attr(get_option('ai_image_cron_category_id', '')); ?>" min="1" class="small-text"></td>
+                </tr>
+                <tr>
+                    <th>Лимит товаров для крон-обработки</th>
+                    <td><input type="number" name="ai_image_cron_limit" value="<?php echo esc_attr(get_option('ai_image_cron_limit', 100)); ?>" min="1" class="small-text"></td>
+                </tr>
                 <tr><th colspan="2"><b>RunwayML API</b></th></tr>
                 <tr>
                     <th>API-ключ RunwayML</th>
@@ -220,12 +263,96 @@ function ai_product_image_admin_page() {
                         <span class="description">Включить подробные логи координат и размеров элементов (для отладки)</span>
                     </td>
                 </tr>
+                <tr><th colspan="2"><b>API для интеграции с Python</b></th></tr>
+                <tr>
+                    <th>Секретный ключ API</th>
+                    <td>
+                        <input type="text" name="ai_image_api_secret" value="<?php echo esc_attr(get_option('ai_image_api_secret', '')); ?>" autocomplete="off" style="width: 350px;">
+                        <p class="description">Секретный ключ для REST API интеграции с Python-скриптом. Должен совпадать с wp_api_secret в config.yaml.</p>
+                    </td>
+                </tr>
             </table>
             <?php submit_button(); ?>
         </form>
         <?php
         return;
     }
+
+    if ($tab === 'dashboard') {
+        // Считаем задачи по статусам
+        $status_counts = [
+            'queued' => 0,
+            'task_created' => 0,
+            'processing' => 0,
+            'processed' => 0,
+            'applied' => 0,
+            'error' => 0,
+            'pending' => 0,
+        ];
+        foreach ($tasks as $task) {
+            $pid = isset($task['task_id']) && preg_match('/_(\d+)$/', $task['task_id'], $m) ? intval($m[1]) : 0;
+            $status = $pid ? AI_Product_Image_Product_Helper::get_status($pid) : ($task['status'] ?? 'pending');
+            if (!isset($status_counts[$status])) $status_counts[$status] = 0;
+            $status_counts[$status]++;
+        }
+        $total = array_sum($status_counts);
+        echo '<h2>Мониторинг и статистика задач</h2>';
+        echo '<div style="display:flex;gap:30px;align-items:flex-end;">';
+        foreach ($status_counts as $status => $count) {
+            $color = [
+                'queued' => '#888',
+                'task_created' => '#0073aa',
+                'processing' => '#00a0d2',
+                'processed' => '#46b450',
+                'applied' => '#008000',
+                'error' => '#d63638',
+                'pending' => '#cccccc',
+            ][$status] ?? '#ccc';
+            echo '<div style="text-align:center;">';
+            echo '<div style="background:' . $color . ';width:40px;height:' . (max(10, $count*2)) . 'px;border-radius:6px 6px 0 0;margin-bottom:5px;"></div>';
+            echo '<div style="font-weight:bold;color:' . $color . ';">' . $count . '</div>';
+            echo '<div style="font-size:12px;">' . $status . '</div>';
+            echo '</div>';
+        }
+        echo '</div>';
+        // Алерты по ошибкам и зависшим задачам
+        $error_tasks = $status_counts['error'] ?? 0;
+        $processing_tasks = $status_counts['processing'] ?? 0;
+        if ($error_tasks > 0) {
+            echo '<div style="margin-top:20px;padding:10px 20px;background:#ffd2d2;color:#a00;border-radius:5px;font-weight:bold;">Внимание: есть задачи со статусом "error" (' . $error_tasks . ')</div>';
+        }
+        if ($processing_tasks > 0) {
+            echo '<div style="margin-top:10px;padding:10px 20px;background:#e6f7ff;color:#0073aa;border-radius:5px;font-weight:bold;">В обработке: ' . $processing_tasks . ' задач(и)</div>';
+        }
+        echo '<div style="margin-top:30px;color:#888;">Всего задач: ' . $total . '</div>';
+        return;
+    }
+
+    // Просмотр логов по task_id
+    if (isset($_GET['view_log'])) {
+        $task_id = sanitize_text_field($_GET['view_log']);
+        $log_file = WP_CONTENT_DIR . '/uploads/ai_image/logs/processor.log';
+        echo '<div class="wrap"><h2>Лог обработки для задачи ' . esc_html($task_id) . '</h2>';
+        if (file_exists($log_file)) {
+            $lines = file($log_file);
+            $filtered = array_filter($lines, function($line) use ($task_id) {
+                return strpos($line, $task_id) !== false;
+            });
+            $last = array_slice($filtered, -100);
+            echo '<pre style="max-height:500px;overflow:auto;background:#222;color:#eee;padding:10px;">' . esc_html(implode('', $last)) . '</pre>';
+        } else {
+            echo '<p>Лог-файл не найден.</p>';
+        }
+        echo '<a href="?page=ai-product-image&tab=tasks" class="button">Назад к очереди</a></div>';
+        return;
+    }
+
+    // Пагинация очереди задач
+    $page = isset($_GET['task_page']) ? max(1, intval($_GET['task_page'])) : 1;
+    $per_page = 20;
+    $total_tasks = count($tasks);
+    $total_pages = max(1, ceil($total_tasks / $per_page));
+    $tasks_to_show = array_slice($tasks, ($page-1)*$per_page, $per_page);
     ?>
     <div class="wrap">
         <h1>AI Product Image — управление задачами</h1>
@@ -245,35 +372,157 @@ function ai_product_image_admin_page() {
             <p><input type="submit" name="ai_image_create_task" class="button button-primary" value="Создать задачу"></p>
         </form>
         <h2>Очередь задач</h2>
+        <form method="get" id="ai-image-task-filters" style="margin-bottom: 20px;">
+            <input type="hidden" name="page" value="ai-product-image">
+            <input type="hidden" name="tab" value="tasks">
+            <label for="filter_status">Статус: </label>
+            <select name="filter_status" id="filter_status">
+                <option value="">Все</option>
+                <option value="queued" 
+        <form method="post" id="ai-image-task-bulk-actions" style="margin-bottom: 10px;">
+            <input type="hidden" name="ai_image_bulk_action_nonce" value="
         <table class="widefat">
             <thead>
                 <tr>
                     <th>Task ID</th>
+                    <th>ID товара</th>
                     <th>Статус</th>
-                    <th>Сообщение</th>
+                    <th>Ошибка</th>
                     <th>Результат</th>
+                    <th>Действия</th>
                 </tr>
             </thead>
             <tbody>
-            <?php if ( empty( $tasks ) ) : ?>
-                <tr><td colspan="4">Задач нет</td></tr>
+            <?php if ( empty( $tasks_to_show ) ) : ?>
+                <tr><td colspan="6">Задач нет</td></tr>
             <?php else :
-                foreach ( $tasks as $task ) :
-                    $result = $task_manager->get_result( $task['task_id'] ?? '' ); ?>
+                foreach ( $tasks_to_show as $task ) :
+                    $result = $task_manager->get_result( $task['task_id'] ?? '' );
+                    $pid = isset($task['task_id']) && preg_match('/_(\d+)$/', $task['task_id'], $m) ? intval($m[1]) : 0;
+                    $status = $pid ? AI_Product_Image_Product_Helper::get_status($pid) : ($task['status'] ?? '');
+                    $error = $pid ? AI_Product_Image_Product_Helper::get_error($pid) : '';
+            ?>
                     <tr>
                         <td><?php echo esc_html( $task['task_id'] ?? '—' ); ?></td>
-                        <td><?php echo esc_html( $result['status'] ?? $task['status'] ?? 'pending' ); ?></td>
-                        <td><?php echo esc_html( $result['message'] ?? '-' ); ?></td>
+                        <td><?php echo $pid ? esc_html($pid) : '—'; ?></td>
+                        <td>
+                            <?php
+                            $status_label = $status ?: ($result['status'] ?? $task['status'] ?? 'pending');
+                            $status_colors = [
+                                'queued' => '#888',
+                                'task_created' => '#0073aa',
+                                'processing' => '#00a0d2',
+                                'processed' => '#46b450',
+                                'applied' => '#008000',
+                                'error' => '#d63638',
+                                'pending' => '#cccccc',
+                            ];
+                            $status_icons = [
+                                'queued' => '⏳',
+                                'task_created' => '📝',
+                                'processing' => '🔄',
+                                'processed' => '✅',
+                                'applied' => '🖼️',
+                                'error' => '❌',
+                                'pending' => '⏸️',
+                            ];
+                            $color = $status_colors[$status_label] ?? '#cccccc';
+                            $icon = $status_icons[$status_label] ?? '⏸️';
+                            $tooltip = [
+                                'queued' => 'В очереди',
+                                'task_created' => 'Задача создана',
+                                'processing' => 'В обработке',
+                                'processed' => 'Обработано',
+                                'applied' => 'Изображение применено',
+                                'error' => 'Ошибка',
+                                'pending' => 'Ожидание',
+                            ][$status_label] ?? $status_label;
+                            ?>
+                            <span title="<?php echo esc_attr($tooltip); ?>" style="display:inline-block;min-width:24px;color:<?php echo esc_attr($color); ?>;font-size:18px;vertical-align:middle;">
+                                <?php echo $icon; ?>
+                            </span>
+                            <span style="color:<?php echo esc_attr($color); ?>;font-weight:bold;vertical-align:middle;">
+                                <?php echo esc_html($status_label); ?>
+                            </span>
+                        </td>
+                        <td><?php echo esc_html( $error ); ?></td>
                         <td>
                             <?php if ( !empty($result['output_image']) ) : ?>
-                                <a href="<?php echo esc_url( wp_upload_dir()['baseurl'] . '/ai_image/' . $result['output_image'] ); ?>" target="_blank">Посмотреть</a>
+                                <button type="button" class="button ai-image-preview-btn" data-img="<?php echo esc_url( wp_upload_dir()['baseurl'] . '/ai_image/' . $result['output_image'] ); ?>">Посмотреть</button>
+                                <a href="<?php echo esc_url( wp_upload_dir()['baseurl'] . '/ai_image/' . $result['output_image'] ); ?>" download class="button">Скачать</a>
                             <?php else : ?>—<?php endif; ?>
+                            <?php if ($task['task_id']): ?>
+                                <button type="button" class="button ai-image-log-btn" data-task="<?php echo esc_attr($task['task_id']); ?>">Логи</button>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if ($pid): ?>
+                                <?php wp_nonce_field('ai_image_reset_status_action', 'ai_image_reset_status_nonce'); ?>
+                                <button type="submit" name="reset_status_product_id" value="<?php echo esc_attr($pid); ?>" class="button">Сбросить статус</button>
+                                <?php wp_nonce_field('ai_image_repeat_process_action', 'ai_image_repeat_process_nonce'); ?>
+                                <button type="submit" name="repeat_process_product_id" value="<?php echo esc_attr($pid); ?>" class="button button-primary">Повторить обработку</button>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach;
             endif; ?>
             </tbody>
         </table>
+        <?php if ($total_pages > 1): ?>
+        <div class="tablenav-pages" style="margin: 10px 0;">
+            <?php for ($i = 1; $i <= $total_pages; $i++): ?>
+                <?php if ($i == $page): ?>
+                    <span style="font-weight:bold;padding:4px 8px;background:#eee;border-radius:3px;"><?php echo $i; ?></span>
+                <?php else: ?>
+                    <a href="?page=ai-product-image&tab=tasks&task_page=<?php echo $i; ?>" style="padding:4px 8px;"><?php echo $i; ?></a>
+                <?php endif; ?>
+            <?php endfor; ?>
+        </div>
+        <?php endif; ?>
     </div>
+    <!-- Модальные окна -->
+    <div id="ai-image-modal-preview" style="display:none;position:fixed;z-index:9999;left:0;top:0;width:100vw;height:100vh;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+        <div style="background:#fff;padding:20px;max-width:90vw;max-height:90vh;overflow:auto;position:relative;">
+            <button type="button" id="ai-image-modal-close" style="position:absolute;top:10px;right:10px;font-size:20px;">×</button>
+            <img id="ai-image-modal-img" src="" alt="Результат" style="max-width:80vw;max-height:80vh;display:block;margin:auto;">
+        </div>
+    </div>
+    <div id="ai-image-modal-log" style="display:none;position:fixed;z-index:9999;left:0;top:0;width:100vw;height:100vh;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+        <div style="background:#fff;padding:20px;max-width:90vw;max-height:90vh;overflow:auto;position:relative;">
+            <button type="button" id="ai-image-modal-log-close" style="position:absolute;top:10px;right:10px;font-size:20px;">×</button>
+            <pre id="ai-image-modal-log-content" style="max-width:80vw;max-height:80vh;overflow:auto;background:#222;color:#eee;padding:10px;"></pre>
+        </div>
+    </div>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Preview modal
+        document.querySelectorAll('.ai-image-preview-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                document.getElementById('ai-image-modal-img').src = btn.getAttribute('data-img');
+                document.getElementById('ai-image-modal-preview').style.display = 'flex';
+            });
+        });
+        document.getElementById('ai-image-modal-close').onclick = function() {
+            document.getElementById('ai-image-modal-preview').style.display = 'none';
+            document.getElementById('ai-image-modal-img').src = '';
+        };
+        // Log modal
+        document.querySelectorAll('.ai-image-log-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var taskId = btn.getAttribute('data-task');
+                fetch('?page=ai-product-image&tab=tasks&view_log=' + encodeURIComponent(taskId) + '&ajax=1')
+                    .then(r => r.text())
+                    .then(txt => {
+                        document.getElementById('ai-image-modal-log-content').textContent = txt;
+                        document.getElementById('ai-image-modal-log').style.display = 'flex';
+                    });
+            });
+        });
+        document.getElementById('ai-image-modal-log-close').onclick = function() {
+            document.getElementById('ai-image-modal-log').style.display = 'none';
+            document.getElementById('ai-image-modal-log-content').textContent = '';
+        };
+    });
+    </script>
     <?php
 } 

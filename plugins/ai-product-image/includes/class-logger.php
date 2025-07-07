@@ -20,6 +20,7 @@ class AI_Product_Image_Logger {
     private $logs_dir;
     private $log_file;
     private $max_size = 1048576; // 1 МБ
+    private $max_archives = 5; // Сколько архивных логов хранить
 
     public function __construct() {
         $upload_dir = wp_upload_dir();
@@ -54,6 +55,14 @@ class AI_Product_Image_Logger {
         if ( file_exists( $this->log_file ) && filesize( $this->log_file ) > $this->max_size ) {
             $archive = $this->logs_dir . 'plugin_' . date('Ymd_His') . '.log';
             rename( $this->log_file, $archive );
+            // Удаляем старые архивы, если их больше max_archives
+            $archives = glob($this->logs_dir . 'plugin_*.log');
+            if (count($archives) > $this->max_archives) {
+                // Сортируем по времени создания (старые — первыми)
+                usort($archives, function($a, $b) { return filemtime($a) - filemtime($b); });
+                $to_delete = array_slice($archives, 0, count($archives) - $this->max_archives);
+                foreach ($to_delete as $f) @unlink($f);
+            }
         }
     }
 } 
