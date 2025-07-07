@@ -116,7 +116,7 @@ pip install -r py/requirements.txt
 1. Скопируйте папку `py/` в корень проекта или отдельную директорию на сервере.
 2. Войдите на сервер по SSH и перейдите в папку `py/`:
    ```
-   cd /path/to/py
+   cd www/market.royaltyres.ru/wp-content/py
    ```
 3. Создайте виртуальное окружение Python 3.9 (если не создано):
    ```

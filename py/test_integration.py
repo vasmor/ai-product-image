@@ -34,7 +34,6 @@ RESULTS_DIR = (PROJECT_ROOT / config['results_dir']).resolve()
 ORIGINALS_DIR = (PROJECT_ROOT / config['originals_dir']).resolve()
 PROCESSED_DIR = (PROJECT_ROOT / config['processed_dir']).resolve()
 TEMPLATES_DIR = (PROJECT_ROOT / config['templates_dir']).resolve()
-LOGOS_DIR = (PROJECT_ROOT / config['logos_dir']).resolve()
 
 # 1. Подготовка тестовой задачи
 TEST_TASK_ID = 'test_integration_001'

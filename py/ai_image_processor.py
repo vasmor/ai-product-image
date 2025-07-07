@@ -52,7 +52,7 @@ LOGS_DIR = (PROJECT_ROOT / config['logs_dir']).resolve()
 ORIGINALS_DIR = (PROJECT_ROOT / config['originals_dir']).resolve()
 PROCESSED_DIR = (PROJECT_ROOT / config['processed_dir']).resolve()
 TEMPLATES_DIR = (PROJECT_ROOT / config['templates_dir']).resolve()
-LOGOS_DIR = (PROJECT_ROOT / config['logos_dir']).resolve()
+# LOGOS_DIR = (PROJECT_ROOT / config['logos_dir']).resolve()  # удалено как неиспользуемое
 BATCH_SIZE = config.get('batch_size', 10)
 
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
