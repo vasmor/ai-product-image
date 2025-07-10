@@ -101,7 +101,7 @@ class AI_Product_Image_Product_Helper {
      */
     public static function set_status($product_id, $status) {
         $product_id = (int)$product_id; // Гарантируем, что это число
-        $allowed = ['queued','task_created','processing','processed','applied','error','pending'];
+        $allowed = ['queued','task_created','processing','processed','applied','error','pending','stuck'];
         if (!in_array($status, $allowed)) {
             if (class_exists('AI_Product_Image_Logger')) {
                 $logger = AI_Product_Image_Plugin::get_instance()->logger;

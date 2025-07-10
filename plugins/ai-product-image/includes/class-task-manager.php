@@ -261,6 +261,10 @@ class AI_Product_Image_Task_Manager {
             $product_id = !empty($data['product_id']) ? intval($data['product_id']) : 0;
             // --- Счётчик попыток ---
             $attempts = isset($data['attempts']) ? intval($data['attempts']) : 0;
+            // Если уже зависший — пропускаем дальнейшие попытки
+            if (($data['status'] ?? '') === 'stuck') {
+                continue;
+            }
             $attempts++;
             $data['attempts'] = $attempts;
             // Если превышен лимит попыток — считаем зависшим
