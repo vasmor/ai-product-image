@@ -144,7 +144,13 @@ function ai_product_image_admin_page() {
     }
     if ($tab === 'mass') {
         $mass_msg = '';
-        $selected_statuses = isset($_POST['mass_status']) && is_array($_POST['mass_status']) ? array_map('sanitize_text_field', $_POST['mass_status']) : ['queued','error'];
+        if (isset($_POST['mass_start'])) {
+            $selected_statuses = isset($_POST['mass_status']) && is_array($_POST['mass_status'])
+                ? array_map('sanitize_text_field', $_POST['mass_status'])
+                : [];
+        } else {
+            $selected_statuses = ['queued','error'];
+        }
         $category_id = isset($_POST['mass_category_id']) ? intval($_POST['mass_category_id']) : (int)get_option('ai_image_tires_category_id', 0);
         $mass_limit = isset($_POST['mass_limit']) ? intval($_POST['mass_limit']) : 100;
         if (isset($_POST['mass_start'])) {
