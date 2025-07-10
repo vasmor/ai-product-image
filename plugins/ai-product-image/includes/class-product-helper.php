@@ -215,15 +215,46 @@ class AI_Product_Image_Product_Helper {
         wp_update_attachment_metadata($attach_id, $attach_data);
         // Установить как основное изображение товара
         $set = set_post_thumbnail($product_id, $attach_id);
-        if (!$set) {
-            // Откат к предыдущему изображению
-            if ($prev_image_id) set_post_thumbnail($product_id, $prev_image_id);
-            self::set_error($product_id, 'Не удалось установить обработанное изображение как основное. Откат выполнен.');
+        $new_attached = (get_post_thumbnail_id($product_id) == $attach_id);
+        // === Проверка наличия оригинала с префиксом <sku>- ===
+        $sku = $product->get_sku();
+        $has_original = false;
+        if ($sku) {
+            $norm_sku = self::normalize_sku($sku);
+            $upload_dir = wp_upload_dir();
+            $originals_dir = trailingslashit($upload_dir['basedir']) . 'ai_image/originals/';
+            $pattern = $originals_dir . $norm_sku . '-*';
+            $files = glob($pattern);
+            if (!$files || count($files) === 0) {
+                if (class_exists('AI_Product_Image_Logger')) {
+                    $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                    $logger->log('ВНИМАНИЕ: Не найден оригинал с префиксом ' . $norm_sku . '- в папке originals для товара ' . $product_id, 'error');
+                }
+            } else {
+                $has_original = true;
+                if (class_exists('AI_Product_Image_Logger')) {
+                    $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                    $logger->log('Проверка оригинала: найден файл ' . basename($files[0]) . ' для товара ' . $product_id . ' (sku=' . $sku . ', norm_sku=' . $norm_sku . ')');
+                }
+            }
+        }
+        // === Удаление исходного изображения товара только если оба условия ===
+        if ($prev_image_id && $new_attached && $has_original) {
+            $prev_file = get_attached_file($prev_image_id);
+            $deleted = wp_delete_attachment($prev_image_id, true);
             if (class_exists('AI_Product_Image_Logger')) {
                 $logger = AI_Product_Image_Plugin::get_instance()->logger;
-                $logger->log('Ошибка: не удалось установить processed-изображение для товара ' . $product_id . '. Откат выполнен.', 'error');
+                if ($deleted) {
+                    $logger->log('Удалено исходное изображение товара (attachment_id=' . $prev_image_id . ', file=' . $prev_file . ') после применения нового processed-изображения для товара ' . $product_id);
+                } else {
+                    $logger->log('Не удалось удалить исходное изображение товара (attachment_id=' . $prev_image_id . ', file=' . $prev_file . ') для товара ' . $product_id, 'error');
+                }
             }
-            return false;
+        } else if ($prev_image_id && (!$new_attached || !$has_original)) {
+            if (class_exists('AI_Product_Image_Logger')) {
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Старое изображение товара (attachment_id=' . $prev_image_id . ') НЕ удалено: новое не прикреплено или не найден оригинал с префиксом sku для товара ' . $product_id, 'warning');
+            }
         }
         self::set_status($product_id, 'applied');
         self::set_error($product_id, '');
@@ -232,5 +263,35 @@ class AI_Product_Image_Product_Helper {
             $logger->log('Успешно применено processed-изображение для товара ' . $product_id . ': ' . $image_path);
         }
         return true;
+    }
+
+    /**
+     * Нормализация SKU: транслитерация, нижний регистр, только буквы/цифры/-/_
+     * @param string $sku
+     * @return string
+     */
+    public static function normalize_sku($sku) {
+        $translit = [
+            // russian
+            'А'  => 'A', 'а'  => 'a', 'Б'  => 'B', 'б'  => 'b', 'В'  => 'V', 'в'  => 'v',
+            'Г'  => 'G', 'г'  => 'g', 'Д'  => 'D', 'д'  => 'd', 'Е'  => 'E', 'е'  => 'e',
+            'Ё'  => 'Jo', 'ё'  => 'jo', 'Ж'  => 'Zh', 'ж'  => 'zh', 'З'  => 'Z', 'з'  => 'z',
+            'И'  => 'I', 'и'  => 'i', 'Й'  => 'J', 'й'  => 'j', 'К'  => 'K', 'к'  => 'k',
+            'Л'  => 'L', 'л'  => 'l', 'М'  => 'M', 'м'  => 'm', 'Н'  => 'N', 'н'  => 'n',
+            'О'  => 'O', 'о'  => 'o', 'П'  => 'P', 'п'  => 'p', 'Р'  => 'R', 'р'  => 'r',
+            'С'  => 'S', 'с'  => 's', 'Т'  => 'T', 'т'  => 't', 'У'  => 'U', 'у'  => 'u',
+            'Ф'  => 'F', 'ф'  => 'f', 'Х'  => 'H', 'х'  => 'h', 'Ц'  => 'C', 'ц'  => 'c',
+            'Ч'  => 'Ch', 'ч'  => 'ch', 'Ш'  => 'Sh', 'ш'  => 'sh', 'Щ'  => 'Shh', 'щ'  => 'shh',
+            'Ъ'  => '', 'ъ'  => '', 'Ы'  => 'Y', 'ы'  => 'y', 'Ь'  => '', 'ь'  => '',
+            'Э'  => 'Je', 'э'  => 'je', 'Ю'  => 'Ju', 'ю'  => 'ju', 'Я'  => 'Ja', 'я'  => 'ja',
+            // global
+            'Ґ'  => 'G', 'ґ'  => 'g', 'Є'  => 'Ie', 'є'  => 'ie', 'І'  => 'I', 'і'  => 'i',
+            'Ї'  => 'I', 'ї'  => 'i', 'Ї' => 'i', 'ї' => 'i', 'Ё' => 'Jo', 'ё' => 'jo',
+            'й' => 'i', 'Й' => 'I'
+        ];
+        $sku = strtr($sku, $translit);
+        $sku = mb_strtolower($sku, 'UTF-8');
+        $sku = preg_replace('/[^a-z0-9_-]/', '', $sku);
+        return $sku;
     }
 } 

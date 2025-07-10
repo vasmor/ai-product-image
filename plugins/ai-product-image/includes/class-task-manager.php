@@ -140,8 +140,10 @@ class AI_Product_Image_Task_Manager {
             }
             return false;
         }
+        // --- Нормализация SKU ---
+        $norm_sku = AI_Product_Image_Product_Helper::normalize_sku($sku);
         // Контроль дубликатов задач по sku
-        $existing_task_files = glob($this->tasks_dir . '*_' . $sku . '.json');
+        $existing_task_files = glob($this->tasks_dir . '*_' . $norm_sku . '.json');
         if ($existing_task_files && count($existing_task_files) > 0) {
             if (in_array($status, ['applied', 'processed']) && $force) {
                 // Повторная обработка: удаляем старые файлы задач
@@ -165,8 +167,8 @@ class AI_Product_Image_Task_Manager {
         $image_id = $product->get_image_id();
         $image_url = wp_get_attachment_url($image_id);
         $image_path = get_attached_file($image_id);
-        $output_filename = 'processed/product_' . $sku . '_ai.png';
-        $task_id = date('Ymd_His') . '_' . $sku;
+        $output_filename = 'processed/product_' . $norm_sku . '_ai.png';
+        $task_id = date('Ymd_His') . '_' . $norm_sku;
         $debug_logging = get_option('ai_image_debug_logging', 0);
         // Определяем файл шаблона по сезону
         $season_lc = mb_strtolower(trim($season));
@@ -195,6 +197,7 @@ class AI_Product_Image_Task_Manager {
             'template' => 'templates/' . $template_file,
             'product_data' => [
                 'sku' => $sku,
+                'norm_sku' => $norm_sku,
                 'brand' => $brand,
                 'model' => $model,
                 'width' => $width,
@@ -223,7 +226,7 @@ class AI_Product_Image_Task_Manager {
         // Копируем оригинал в originals/
         if ($sku) {
             $original_name = basename($image_path);
-            $original_with_sku = $sku . '-' . $original_name;
+            $original_with_sku = $norm_sku . '-' . $original_name;
             $this->backup_original_image($image_path, $original_with_sku);
         }
         // Сохраняем задачу в tasks/

@@ -146,3 +146,42 @@ function filter_products_query_by_klb_do_not_delete( $query ) {
         }
     }
 }
+
+add_action('pmxi_gallery_image', function($post_id, $att_id, $filepath, $is_keep_existing_images = '') {
+    $sku = get_post_meta($post_id, '_sku', true);
+    $existing_ids = [];
+
+    // Получаем ID всех изображений, включая новое
+    $gallery = get_post_meta($post_id, '_product_image_gallery', true);
+    if ($gallery) {
+        $existing_ids = explode(',', $gallery);
+    }
+    $main = get_post_thumbnail_id($post_id);
+    if ($main) {
+        array_unshift($existing_ids, $main);
+    }
+
+    // Если не было изображений до импорта — оставляем новое
+    if (count($existing_ids) <= 1) {
+        return;
+    }
+
+    // Проверяем, есть ли в старых файлах SKU
+    $has_sku = false;
+    foreach ($existing_ids as $id) {
+        if ($id == $att_id) continue; // skip только что добавленный
+        $name = basename(get_attached_file($id));
+        if ($sku && stripos($name, $sku) !== false) {
+            $has_sku = true;
+            break;
+        }
+    }
+
+    // Если найдено старое с SKU — удаляем вновь добавленное
+    if ($has_sku) {
+        wp_delete_attachment($att_id, true);
+    }
+
+}, 10, 4);
+
+// не забыть добавить в настройки импорта запрет на обновление поля _ai_image_status

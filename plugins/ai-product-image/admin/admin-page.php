@@ -593,7 +593,8 @@ function ai_product_image_admin_page() {
             $results = [];
             foreach ($skus as $sku) {
                 $originals_dir = trailingslashit(wp_upload_dir()['basedir']) . 'ai_image/originals/';
-                $files = glob($originals_dir . $sku . '-*');
+                $norm_sku = AI_Product_Image_Product_Helper::normalize_sku($sku);
+                $files = glob($originals_dir . $norm_sku . '-*');
                 if (!$files) {
                     $results[] = "[{$sku}] Оригинал не найден.";
                     continue;
