@@ -152,6 +152,12 @@ function ai_product_image_admin_page() {
                 $mass_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
             } else {
                 $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit);
+                $only_instock = get_option('ai_image_only_instock', 0);
+                if ($only_instock) {
+                    $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, true);
+                } else {
+                    $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, false);
+                }
                 if (empty($product_ids)) {
                     $mass_msg = '<div class="notice notice-warning"><p>Нет товаров для обработки по выбранному фильтру.</p></div>';
                 } else {
@@ -277,6 +283,13 @@ function ai_product_image_admin_page() {
                 <tr>
                     <th>Лимит товаров для крон-обработки</th>
                     <td><input type="number" name="ai_image_cron_limit" value="<?php echo esc_attr(get_option('ai_image_cron_limit', 100)); ?>" min="1" class="small-text"></td>
+                </tr>
+                <tr>
+                    <th>Обрабатывать только товары с положительным остатком</th>
+                    <td>
+                        <input type="checkbox" name="ai_image_only_instock" value="1" <?php checked(1, get_option('ai_image_only_instock', 0)); ?> />
+                        <span class="description">Если включено, массовая и крон-обработка будут выбирать только товары с остатком больше 0.</span>
+                    </td>
                 </tr>
                 <tr><th colspan="2"><b>RunwayML API</b></th></tr>
                 <tr>

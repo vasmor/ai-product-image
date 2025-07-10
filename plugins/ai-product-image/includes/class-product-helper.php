@@ -16,7 +16,7 @@ class AI_Product_Image_Product_Helper {
      * @param int $limit
      * @return array
      */
-    public static function get_products_by_category_tree( $cat_id, $limit = 0 ) {
+    public static function get_products_by_category_tree( $cat_id, $limit = 0, $only_instock = false ) {
         $cat_id = (int)$cat_id;
         $limit = (int)$limit;
         $args = [
@@ -32,6 +32,14 @@ class AI_Product_Image_Product_Helper {
                 ],
             ],
         ];
+        if ($only_instock) {
+            $args['meta_query'][] = [
+                'key' => '_stock',
+                'value' => 0,
+                'compare' => '>',
+                'type' => 'NUMERIC'
+            ];
+        }
         $query = new WP_Query( $args );
         return $query->posts;
     }
