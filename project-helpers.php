@@ -49,120 +49,100 @@ add_filter( 'parse_query', 'filter_products_query_by_klb_do_not_delete' );
 function filter_products_query_by_klb_do_not_delete( $query ) {
     global $pagenow, $typenow;
 
-    if ( 'edit.php' === $pagenow && 'product' === $typenow && ( ( isset( $_GET['descr'] ) && $_GET['descr'] != '' ) || ( isset( $_GET['discount'] ) && $_GET['discount'] != '' ) || ( isset( $_GET['klb_do_not_delete'] ) && $_GET['klb_do_not_delete'] != '' ) || ( isset( $_GET['stock_qty'] ) && $_GET['stock_qty'] != '' ) ) ) {
+    if ( 'edit.php' === $pagenow && 'product' === $typenow && (
+        ( isset( $_GET['descr'] ) && $_GET['descr'] != '' ) ||
+        ( isset( $_GET['discount'] ) && $_GET['discount'] != '' ) ||
+        ( isset( $_GET['klb_do_not_delete'] ) && $_GET['klb_do_not_delete'] != '' ) ||
+        ( isset( $_GET['stock_qty'] ) && $_GET['stock_qty'] != '' ) ||
+        ( isset( $_GET['ai_image_status'] ) && $_GET['ai_image_status'] != '' )
+    ) ) {
+        $meta_query = [];
+        // Фильтр по статусу AI-обработки
         if (isset($_GET['ai_image_status']) && $_GET['ai_image_status'] !== '') {
-            $meta_query = array(
-                array(
-                    'key' => '_ai_image_status',
-                    'value' => sanitize_text_field($_GET['ai_image_status'])
-                )
-            );
-            $query->set('meta_query', $meta_query);
-            return;
+            $meta_query[] = [
+                'key' => '_ai_image_status',
+                'value' => sanitize_text_field($_GET['ai_image_status'])
+            ];
         }
-        			
-        $meta_query = array(
-            'relation' => 'OR',
-            array(
-                'key' => 'klb_do_not_delete',
-                'compare' => 'NOT EXISTS'
-            ),
-            array(
+        // Фильтр по описанию
+        $descr = $_GET['descr'];
+        if ( 'yes' === $descr ) {
+            $meta_query[] = [
+                'key'    => '_product_ai_generated',
+                'compare'=> 'EXISTS'
+            ];
+        } elseif ( 'no' === $descr ) {
+            $meta_query[] = [
+                'key'    => '_product_ai_generated',
+                'compare'=> 'NOT EXISTS'
+            ];
+        }
+        // Фильтр по скидке
+        if (isset($_GET['discount'])) {
+            switch ($_GET['discount']) {
+                case 'with_discount':
+                    $meta_query[] = [
+                        'key'     => '_sale_price',
+                        'value'   => 0,
+                        'compare' => '>',
+                        'type'    => 'NUMERIC'
+                    ];
+                    break;
+                case 'without_discount':
+                    $meta_query[] = [
+                        'relation' => 'OR',
+                        [
+                            'key' => '_sale_price',
+                            'compare' => 'NOT EXISTS'
+                        ],
+                        [
+                            'key'     => '_sale_price',
+                            'value'   => '',
+                            'compare' => '='
+                        ],
+                        [
+                            'key'     => '_sale_price',
+                            'value'   => 0,
+                            'compare' => '=',
+                            'type'    => 'NUMERIC'
+                        ]
+                    ];
+                    break;
+            }
+        }
+        // Фильтр по автоимпорту
+        $upd = $_GET['klb_do_not_delete'];
+        if ( 'update' === $upd ) {
+            $meta_query[] = [
                 'key' => 'klb_do_not_delete',
                 'value' => '1',
-				'compare' => '!='
-            )
-        );
-		
-		$upd = $_GET['klb_do_not_delete'];
-        if ( 'update' === $upd ) {
-            $meta_query = array(                
-                array(
-					'key' => 'klb_do_not_delete',
-                    'value' => '1',
-					'compare' => '!='                    
-                ),
-            );
+                'compare' => '!='
+            ];
         } elseif ( 'notupdate' === $upd ) {
-            $meta_query = array(                
-                array(
-                    'key' => 'klb_do_not_delete',
-                    'value' => '1',
-                )
-            );
+            $meta_query[] = [
+                'key' => 'klb_do_not_delete',
+                'value' => '1',
+            ];
         }
-		
-		$stock = $_GET['stock_qty'];
-		if ( 'zero' === $stock ) {
-            $meta_query = array(                
-                array(
-					'key' => '_stock',
-                    'value' => '0',
-                ),
-            );
+        // Фильтр по остатку
+        $stock = $_GET['stock_qty'];
+        if ( 'zero' === $stock ) {
+            $meta_query[] = [
+                'key' => '_stock',
+                'value' => '0',
+            ];
         } elseif ( 'notzero' === $stock ) {
-            $meta_query = array(                
-                array(
-                    'key' => '_stock',
-                    'value' => '0',
-					'compare' => '!='
-                )
-            );
+            $meta_query[] = [
+                'key' => '_stock',
+                'value' => '0',
+                'compare' => '!='
+            ];
         }
-		
-		if (isset($_GET['discount'])) {
-			switch ($_GET['discount']) {
-				case 'with_discount':
-					$meta_query = array(
-						array(
-							'key'     => '_sale_price',
-							'value'   => 0,
-							'compare' => '>',
-							'type'    => 'NUMERIC'
-						)
-					);
-					break;
-
-				case 'without_discount':
-					$meta_query = array(
-						'relation' => 'OR',
-						array(
-							'key' => '_sale_price',
-							'compare' => 'NOT EXISTS'
-						),
-						array(
-							'key'     => '_sale_price',
-							'value'   => '',
-							'compare' => '='
-						),
-						array(
-							'key'     => '_sale_price',
-							'value'   => 0,
-							'compare' => '=',
-							'type'    => 'NUMERIC'
-						)
-					);
-					break;
-			}
-		}
-		
-		$descr = $_GET['descr'];
-		if ( 'yes' === $descr ) {
-            $meta_query = array(                
-                array(
-					'key' 	  => '_product_ai_generated',
-                    'compare' => 'EXISTS'
-                ),
-            );
-        } elseif ( 'no' === $descr ) {
-            $meta_query = array(                
-                array(
-					'key' 	  => '_product_ai_generated',
-                    'compare' => 'NOT EXISTS'
-                ),
-            );
+        if (!empty($meta_query)) {
+            if (count($meta_query) > 1) {
+                $meta_query = array_merge(['relation' => 'AND'], $meta_query);
+            }
+            $query->set('meta_query', $meta_query);
         }
-
-        $query->set( 'meta_query', $meta_query );
     }
 }
