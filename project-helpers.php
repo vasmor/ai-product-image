@@ -147,8 +147,37 @@ function filter_products_query_by_klb_do_not_delete( $query ) {
     }
 }
 
+function normalize_sku($sku) {
+    $translit = [
+        // russian
+        'А'  => 'A', 'а'  => 'a', 'Б'  => 'B', 'б'  => 'b', 'В'  => 'V', 'в'  => 'v',
+        'Г'  => 'G', 'г'  => 'g', 'Д'  => 'D', 'д'  => 'd', 'Е'  => 'E', 'е'  => 'e',
+        'Ё'  => 'Jo', 'ё'  => 'jo', 'Ж'  => 'Zh', 'ж'  => 'zh', 'З'  => 'Z', 'з'  => 'z',
+        'И'  => 'I', 'и'  => 'i', 'Й'  => 'J', 'й'  => 'j', 'К'  => 'K', 'к'  => 'k',
+        'Л'  => 'L', 'л'  => 'l', 'М'  => 'M', 'м'  => 'm', 'Н'  => 'N', 'н'  => 'n',
+        'О'  => 'O', 'о'  => 'o', 'П'  => 'P', 'п'  => 'p', 'Р'  => 'R', 'р'  => 'r',
+        'С'  => 'S', 'с'  => 's', 'Т'  => 'T', 'т'  => 't', 'У'  => 'U', 'у'  => 'u',
+        'Ф'  => 'F', 'ф'  => 'f', 'Х'  => 'H', 'х'  => 'h', 'Ц'  => 'C', 'ц'  => 'c',
+        'Ч'  => 'Ch', 'ч'  => 'ch', 'Ш'  => 'Sh', 'ш'  => 'sh', 'Щ'  => 'Shh', 'щ'  => 'shh',
+        'Ъ'  => '', 'ъ'  => '', 'Ы'  => 'Y', 'ы'  => 'y', 'Ь'  => '', 'ь'  => '',
+        'Э'  => 'Je', 'э'  => 'je', 'Ю'  => 'Ju', 'ю'  => 'ju', 'Я'  => 'Ja', 'я'  => 'ja',
+        // global
+        'Ґ'  => 'G', 'ґ'  => 'g', 'Є'  => 'Ie', 'є'  => 'ie', 'І'  => 'I', 'і'  => 'i',
+        'Ї'  => 'I', 'ї'  => 'i', 'Ї' => 'i', 'ї' => 'i', 'Ё' => 'Jo', 'ё' => 'jo',
+        'й' => 'i', 'Й' => 'I'
+    ];
+    $sku = strtr($sku, $translit);
+    $sku = mb_strtolower($sku, 'UTF-8');
+    $sku = preg_replace('/[^a-z0-9_-]/', '', $sku);
+    return $sku;
+}
+
 add_action('pmxi_gallery_image', function($post_id, $att_id, $filepath, $is_keep_existing_images = '') {
     $sku = get_post_meta($post_id, '_sku', true);
+    if (empty($sku)) return;
+
+    $normalized_sku = normalize_sku($sku);
+
     $existing_ids = [];
 
     // Получаем ID всех изображений, включая новое
@@ -166,20 +195,31 @@ add_action('pmxi_gallery_image', function($post_id, $att_id, $filepath, $is_keep
         return;
     }
 
-    // Проверяем, есть ли в старых файлах SKU
+    // Проверяем, есть ли в старых файлах SKU (с учетом нормализации)
     $has_sku = false;
     foreach ($existing_ids as $id) {
-        if ($id == $att_id) continue; // skip только что добавленный
+        if ($id == $att_id) continue; // пропускаем только что добавленное изображение
         $name = basename(get_attached_file($id));
-        if ($sku && stripos($name, $sku) !== false) {
+        $normalized_name = normalize_sku($name);
+        if ($normalized_sku && stripos($normalized_name, $normalized_sku) !== false) {
             $has_sku = true;
             break;
         }
     }
 
-    // Если найдено старое с SKU — удаляем вновь добавленное
+    // Если найдено старое с SKU — удаляем вновь добавленное и назначаем изображение с SKU основным
     if ($has_sku) {
         wp_delete_attachment($att_id, true);
+        // Назначаем изображение с SKU как основное
+        foreach ($existing_ids as $id) {
+            if ($id == $att_id) continue;
+            $name = basename(get_attached_file($id));
+            $normalized_name = normalize_sku($name);
+            if ($normalized_sku && stripos($normalized_name, $normalized_sku) !== false) {
+                set_post_thumbnail($post_id, $id);
+                break;
+            }
+        }
     }
 
 }, 10, 4);

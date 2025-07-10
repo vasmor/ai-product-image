@@ -193,7 +193,7 @@ class AI_Product_Image_Task_Manager {
             'task_id' => $task_id,
             'product_id' => $product_id, // <--- добавлено поле product_id
             'type' => 'tyre',
-            'original_image' => 'originals/' . basename($image_path),
+            'original_image' => 'originals/' . $norm_sku . '-' . basename($image_path),
             'template' => 'templates/' . $template_file,
             'product_data' => [
                 'sku' => $sku,

@@ -98,6 +98,8 @@ function ai_product_image_admin_page() {
         $result_msg = '';
         $runwayml_prompt = trim(get_option('ai_image_runwayml_prompt', ''));
         if (isset($_POST['single_process'])) {
+            $product_id = intval($_POST['single_product_id'] ?? 0);
+            $force = !empty($_POST['single_force_reprocess']);
             if ($runwayml_prompt === '') {
                 $result_msg = '<div class="notice notice-error"><p>Промпт для RunwayML не заполнен! Заполните его в настройках.</p></div>';
             } else {
