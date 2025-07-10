@@ -79,7 +79,7 @@ class AI_Product_Image_Cron {
             }
         }
         // 2. Запуск задач для queued/error
-        $category_id = intval(get_option('ai_image_cron_category_id', 14834));
+        $category_id = intval(get_option('ai_image_tires_category_id', 0));
         $limit = intval(get_option('ai_image_cron_limit', 1000));
         $only_instock = get_option('ai_image_only_instock', 0);
         $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $limit, $only_instock);

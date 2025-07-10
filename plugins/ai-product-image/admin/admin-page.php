@@ -102,7 +102,7 @@ function ai_product_image_admin_page() {
                 $result_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
             } elseif (!$product_id || get_post_type($product_id) !== 'product') {
                 $result_msg = '<div class="notice notice-error"><p>Товар не найден.</p></div>';
-            } elseif (!AI_Product_Image_Product_Helper::product_in_category_tree($product_id, 14834)) {
+            } elseif (!AI_Product_Image_Product_Helper::product_in_category_tree($product_id, (int)get_option('ai_image_tires_category_id', 0))) {
                 $result_msg = '<div class="notice notice-error"><p>Товар не относится к нужной категории.</p></div>';
             } else {
                 $already_processed = get_post_meta($product_id, '_ai_image_processed', true);
@@ -145,7 +145,7 @@ function ai_product_image_admin_page() {
     if ($tab === 'mass') {
         $mass_msg = '';
         $selected_statuses = isset($_POST['mass_status']) && is_array($_POST['mass_status']) ? array_map('sanitize_text_field', $_POST['mass_status']) : ['queued','error'];
-        $category_id = isset($_POST['mass_category_id']) ? intval($_POST['mass_category_id']) : '';
+        $category_id = isset($_POST['mass_category_id']) ? intval($_POST['mass_category_id']) : (int)get_option('ai_image_tires_category_id', 0);
         $mass_limit = isset($_POST['mass_limit']) ? intval($_POST['mass_limit']) : 100;
         if (isset($_POST['mass_start'])) {
             if (get_transient('ai_image_processing_lock')) {
@@ -289,6 +289,13 @@ function ai_product_image_admin_page() {
                     <td>
                         <input type="checkbox" name="ai_image_only_instock" value="1" <?php checked(1, get_option('ai_image_only_instock', 0)); ?> />
                         <span class="description">Если включено, массовая и крон-обработка будут выбирать только товары с остатком больше 0.</span>
+                    </td>
+                </tr>
+                <tr>
+                    <th><span style="color:red">*</span> ID головной категории шин</th>
+                    <td>
+                        <input type="number" name="ai_image_tires_category_id" value="<?php echo esc_attr(get_option('ai_image_tires_category_id', '')); ?>" min="1" class="small-text" required>
+                        <span class="description">Обязательное поле. Укажите ID основной категории шин (используется для массовой и крон-обработки).</span>
                     </td>
                 </tr>
                 <tr><th colspan="2"><b>RunwayML API</b></th></tr>

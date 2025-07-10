@@ -177,6 +177,16 @@ class AI_Product_Image_Task_Manager {
         } else {
             $template_file = 'background_allseason.jpg';
         }
+        // Проверка наличия шаблона
+        $upload_dir = wp_upload_dir();
+        $template_path = trailingslashit($upload_dir['basedir']) . 'ai_image/templates/' . $template_file;
+        if (!file_exists($template_path)) {
+            if (class_exists('AI_Product_Image_Logger')) {
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Пропуск создания задачи: не найден шаблон для сезона "' . $season_lc . '" (файл: ' . $template_file . ') для товара ' . $product_id, 'error');
+            }
+            return false;
+        }
         $task = [
             'task_id' => $task_id,
             'product_id' => $product_id, // <--- добавлено поле product_id
