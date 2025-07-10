@@ -125,12 +125,35 @@ class AI_Product_Image_Task_Manager {
             require_once dirname(__FILE__) . '/class-product-helper.php';
         }
         $status = AI_Product_Image_Product_Helper::get_status($product_id);
-        if ( $status && $status !== 'error' ) {
-            // Задача уже в работе или завершена, не создаём новую
+        $force = !empty($settings['force']);
+        if (in_array($status, ['applied', 'processed']) && !$force) {
+            // Уже обработан, повторная обработка не запрошена
             return false;
         }
         $product = wc_get_product($product_id);
         if (!$product) return false;
+        $sku = $product->get_sku();
+        if (!$sku) {
+            if (class_exists('AI_Product_Image_Logger')) {
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Ошибка: у товара ' . $product_id . ' отсутствует sku, задача не создана.');
+            }
+            return false;
+        }
+        // Контроль дубликатов задач по sku
+        $existing_task_files = glob($this->tasks_dir . '*_' . $sku . '.json');
+        if ($existing_task_files && count($existing_task_files) > 0) {
+            if (in_array($status, ['applied', 'processed']) && $force) {
+                // Повторная обработка: удаляем старые файлы задач
+                foreach ($existing_task_files as $f) { unlink($f); }
+            } else {
+                if (class_exists('AI_Product_Image_Logger')) {
+                    $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                    $logger->log('Дубликат: задача для sku ' . $sku . ' уже существует, новая не создаётся.');
+                }
+                return false;
+            }
+        }
         $brand = $product->get_attribute('pa_brend');
         $model = $product->get_attribute('pa_model');
         $width = $product->get_attribute('pa_shirina-profilja-v-mm');
@@ -142,8 +165,8 @@ class AI_Product_Image_Task_Manager {
         $image_id = $product->get_image_id();
         $image_url = wp_get_attachment_url($image_id);
         $image_path = get_attached_file($image_id);
-        $output_filename = 'processed/product_' . $product_id . '_ai.png';
-        $task_id = date('Ymd_His') . '_' . $product_id;
+        $output_filename = 'processed/product_' . $sku . '_ai.png';
+        $task_id = date('Ymd_His') . '_' . $sku;
         $debug_logging = get_option('ai_image_debug_logging', 0);
         // Определяем файл шаблона по сезону
         $season_lc = mb_strtolower(trim($season));
@@ -156,10 +179,12 @@ class AI_Product_Image_Task_Manager {
         }
         $task = [
             'task_id' => $task_id,
+            'product_id' => $product_id, // <--- добавлено поле product_id
             'type' => 'tyre',
             'original_image' => 'originals/' . basename($image_path),
             'template' => 'templates/' . $template_file,
             'product_data' => [
+                'sku' => $sku,
                 'brand' => $brand,
                 'model' => $model,
                 'width' => $width,
@@ -204,6 +229,8 @@ class AI_Product_Image_Task_Manager {
         $count = 0;
         $upload_dir = wp_upload_dir();
         $results_dir = trailingslashit( $upload_dir['basedir'] ) . 'ai_image/results/';
+        $STUCK_ATTEMPTS = 5;
+        $stuck_results = [];
         if ( ! class_exists('AI_Product_Image_Product_Helper') ) {
             require_once dirname(__FILE__) . '/class-product-helper.php';
         }
@@ -211,31 +238,110 @@ class AI_Product_Image_Task_Manager {
             $json = file_get_contents($file);
             $data = json_decode($json, true);
             if (!$data || empty($data['task_id'])) continue;
-            if (preg_match('/_(\d+)$/', $data['task_id'], $m)) {
-                $product_id = intval($m[1]);
+            $task_id = $data['task_id'];
+            $task_file = $this->tasks_dir . $task_id . '.json';
+            $product_id = !empty($data['product_id']) ? intval($data['product_id']) : 0;
+            // --- Счётчик попыток ---
+            $attempts = isset($data['attempts']) ? intval($data['attempts']) : 0;
+            $attempts++;
+            $data['attempts'] = $attempts;
+            // Если превышен лимит попыток — считаем зависшим
+            if ($attempts >= $STUCK_ATTEMPTS) {
                 if ($product_id && get_post_type($product_id) === 'product') {
-                    if ($data['status'] === 'success') {
-                        update_post_meta($product_id, '_ai_image_processed', $data['task_id']);
-                        $applied = false;
-                        if (!empty($data['output_image'])) {
-                            $processed_path = trailingslashit($upload_dir['basedir']) . 'ai_image/' . $data['output_image'];
-                            $applied = AI_Product_Image_Product_Helper::apply_processed_image_to_product($product_id, $processed_path);
-                        }
-                        if ($applied) {
-                            AI_Product_Image_Product_Helper::set_status($product_id, 'applied');
-                        } else {
-                            AI_Product_Image_Product_Helper::set_status($product_id, 'error');
-                        }
+                    AI_Product_Image_Product_Helper::set_status($product_id, 'stuck');
+                    AI_Product_Image_Product_Helper::set_error($product_id, 'Результат завис: превышено число попыток применения (' . $attempts . ')');
+                }
+                $data['status'] = 'stuck';
+                $data['error'] = 'Результат завис: превышено число попыток применения (' . $attempts . ')';
+                file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+                if (class_exists('AI_Product_Image_Logger')) {
+                    $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                    $sku = !empty($data['product_data']['sku']) ? $data['product_data']['sku'] : '';
+                    $logger->log('Результат задачи завис: product_id=' . $product_id . ', sku=' . $sku . ', task_id=' . $task_id . ', attempts=' . $attempts, 'error');
+                }
+                $stuck_results[] = [
+                    'task_id' => $task_id,
+                    'product_id' => $product_id,
+                    'sku' => $data['product_data']['sku'] ?? '',
+                    'error' => $data['error'] ?? '',
+                    'attempts' => $attempts,
+                ];
+                continue;
+            } else {
+                // Сохраняем увеличенный attempts
+                file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+            }
+            if ($product_id && get_post_type($product_id) === 'product') {
+                if ($data['status'] === 'success') {
+                    update_post_meta($product_id, '_ai_image_processed', $data['task_id']);
+                    $applied = false;
+                    if (!empty($data['output_image'])) {
+                        $processed_path = trailingslashit($upload_dir['basedir']) . 'ai_image/' . $data['output_image'];
+                        $applied = AI_Product_Image_Product_Helper::apply_processed_image_to_product($product_id, $processed_path);
+                    }
+                    if ($applied) {
+                        AI_Product_Image_Product_Helper::set_status($product_id, 'applied');
                         AI_Product_Image_Product_Helper::set_error($product_id, '');
                         $count++;
+                        if (!empty($data['gallery_image'])) {
+                            $gallery_path = trailingslashit($upload_dir['basedir']) . 'ai_image/' . $data['gallery_image'];
+                            if (file_exists($gallery_path)) {
+                                $upload = wp_upload_bits(basename($gallery_path), null, file_get_contents($gallery_path));
+                                if (!$upload['error']) {
+                                    $wp_filetype = wp_check_filetype($upload['file'], null);
+                                    $attachment = [
+                                        'post_mime_type' => $wp_filetype['type'],
+                                        'post_title'     => sanitize_file_name(basename($upload['file'])),
+                                        'post_content'   => '',
+                                        'post_status'    => 'inherit'
+                                    ];
+                                    $attach_id = wp_insert_attachment($attachment, $upload['file'], 0);
+                                    require_once(ABSPATH . 'wp-admin/includes/image.php');
+                                    $attach_data = wp_generate_attachment_metadata($attach_id, $upload['file']);
+                                    wp_update_attachment_metadata($attach_id, $attach_data);
+                                    $gallery_ids = get_post_meta($product_id, '_product_image_gallery', true);
+                                    $gallery_ids_arr = $gallery_ids ? explode(',', $gallery_ids) : [];
+                                    if (!in_array($attach_id, $gallery_ids_arr)) {
+                                        $gallery_ids_arr[] = $attach_id;
+                                        update_post_meta($product_id, '_product_image_gallery', implode(',', array_filter($gallery_ids_arr)));
+                                    }
+                                }
+                            }
+                        }
+                        if (file_exists($task_file)) {
+                            unlink($task_file);
+                        }
+                        // --- Удаляем файл результата только при полном успехе ---
+                        if (file_exists($file)) {
+                            unlink($file);
+                        }
                     } else {
+                        $sku = !empty($data['product_data']['sku']) ? $data['product_data']['sku'] : '';
                         AI_Product_Image_Product_Helper::set_status($product_id, 'error');
-                        $err = !empty($data['error']) ? $data['error'] : 'Ошибка обработки';
-                        AI_Product_Image_Product_Helper::set_error($product_id, $err);
+                        if (class_exists('AI_Product_Image_Logger')) {
+                            $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                            $logger->log('Ошибка применения processed-изображения: product_id=' . $product_id . ', sku=' . $sku . ', task_id=' . $task_id, 'error');
+                        }
+                        // Файл результата НЕ удаляем, чтобы cron мог повторить попытку
                     }
+                    // AI_Product_Image_Product_Helper::set_error($product_id, ''); // уже сброшено при успехе
+                } else {
+                    AI_Product_Image_Product_Helper::set_status($product_id, 'error');
+                    $err = !empty($data['error']) ? $data['error'] : 'Ошибка обработки';
+                    AI_Product_Image_Product_Helper::set_error($product_id, $err);
+                    $sku = !empty($data['product_data']['sku']) ? $data['product_data']['sku'] : '';
+                    if (class_exists('AI_Product_Image_Logger')) {
+                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                        $logger->log('Ошибка применения результата: product_id=' . $product_id . ', sku=' . $sku . ', task_id=' . $task_id . ', error=' . $err, 'error');
+                    }
+                    if (file_exists($task_file)) {
+                        unlink($task_file);
+                    }
+                    // Файл результата НЕ удаляем, чтобы cron мог повторить попытку
                 }
             }
         }
+        // Можно вернуть массив зависших задач для вывода в dashboard
         return $count;
     }
 
@@ -262,11 +368,15 @@ class AI_Product_Image_Task_Manager {
         if ( ! class_exists('AI_Product_Image_Product_Helper') ) {
             require_once dirname(__FILE__) . '/class-product-helper.php';
         }
-        if (preg_match('/_(\d+)$/', $task_id, $m)) {
-            $product_id = intval($m[1]);
-            if ($product_id && get_post_type($product_id) === 'product') {
-                AI_Product_Image_Product_Helper::set_status($product_id, 'processing');
-                return true;
+        // Теперь product_id должен быть получен из задачи, а не из task_id
+        $tasks = $this->get_tasks();
+        foreach ($tasks as $task) {
+            if (!empty($task['task_id']) && $task['task_id'] === $task_id && !empty($task['product_id'])) {
+                $product_id = intval($task['product_id']);
+                if ($product_id && get_post_type($product_id) === 'product') {
+                    AI_Product_Image_Product_Helper::set_status($product_id, 'processing');
+                    return true;
+                }
             }
         }
         return false;

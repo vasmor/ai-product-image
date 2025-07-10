@@ -17,6 +17,8 @@ class AI_Product_Image_Product_Helper {
      * @return array
      */
     public static function get_products_by_category_tree( $cat_id, $limit = 0 ) {
+        $cat_id = (int)$cat_id;
+        $limit = (int)$limit;
         $args = [
             'post_type'      => 'product',
             'posts_per_page' => $limit > 0 ? $limit : -1,
@@ -40,6 +42,7 @@ class AI_Product_Image_Product_Helper {
      * @return array
      */
     public static function get_category_and_descendants( $cat_id ) {
+        $cat_id = (int)$cat_id;
         $ids = [ $cat_id ];
         $children = get_terms( [
             'taxonomy'   => 'product_cat',
@@ -60,6 +63,8 @@ class AI_Product_Image_Product_Helper {
      * @return bool
      */
     public static function product_in_category_tree( $product_id, $cat_id ) {
+        $product_id = (int)$product_id;
+        $cat_id = (int)$cat_id;
         $terms = get_the_terms( $product_id, 'product_cat' );
         if ( ! $terms || is_wp_error( $terms ) ) return false;
         $target_ids = self::get_category_and_descendants( $cat_id );
@@ -77,6 +82,7 @@ class AI_Product_Image_Product_Helper {
      * @return string
      */
     public static function get_status($product_id) {
+        $product_id = (int)$product_id;
         return get_post_meta($product_id, '_ai_image_status', true);
     }
 
@@ -86,7 +92,39 @@ class AI_Product_Image_Product_Helper {
      * @param string $status
      */
     public static function set_status($product_id, $status) {
-        update_post_meta($product_id, '_ai_image_status', $status);
+        $product_id = (int)$product_id; // Гарантируем, что это число
+        $allowed = ['queued','task_created','processing','processed','applied','error','pending'];
+        if (!in_array($status, $allowed)) {
+            if (class_exists('AI_Product_Image_Logger')) {
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Попытка записать неразрешённый статус: ' . $status . ' для товара ' . $product_id, 'error');
+            }
+            return false;
+        }
+        $max_attempts = 3;
+        $attempt = 0;
+        $ok = false;
+        while ($attempt < $max_attempts && !$ok) {
+            $ok = update_post_meta($product_id, '_ai_image_status', $status);
+            if (!$ok) {
+                $current = get_post_meta($product_id, '_ai_image_status', true);
+                if ($current === $status) {
+                    // Не ошибка: попытка записать тот же статус
+                    if (class_exists('AI_Product_Image_Logger')) {
+                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                        $logger->log('Попытка записать тот же статус "' . $status . '" для товара ' . $product_id . ' (уже установлен)', 'info');
+                    }
+                    break;
+                } else {
+                    if (class_exists('AI_Product_Image_Logger')) {
+                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                        $logger->log('Ошибка смены статуса товара ' . $product_id . ' на ' . $status . ' (попытка ' . ($attempt+1) . ')', 'error');
+                    }
+                    usleep(200000); // 200 мс
+                }
+            }
+            $attempt++;
+        }
     }
 
     /**
@@ -95,6 +133,7 @@ class AI_Product_Image_Product_Helper {
      * @return string
      */
     public static function get_error($product_id) {
+        $product_id = (int)$product_id;
         return get_post_meta($product_id, '_ai_image_error', true);
     }
 
@@ -104,6 +143,7 @@ class AI_Product_Image_Product_Helper {
      * @param string $error
      */
     public static function set_error($product_id, $error) {
+        $product_id = (int)$product_id;
         update_post_meta($product_id, '_ai_image_error', $error);
     }
 
@@ -112,6 +152,7 @@ class AI_Product_Image_Product_Helper {
      * @param int $product_id
      */
     public static function reset_status($product_id) {
+        $product_id = (int)$product_id;
         delete_post_meta($product_id, '_ai_image_status');
         delete_post_meta($product_id, '_ai_image_error');
     }
@@ -123,10 +164,12 @@ class AI_Product_Image_Product_Helper {
      * @return bool
      */
     public static function apply_processed_image_to_product($product_id, $image_path) {
+        $product_id = (int)$product_id;
         if (!file_exists($image_path)) {
             self::set_error($product_id, 'Файл обработанного изображения не найден: ' . $image_path);
             if (class_exists('AI_Product_Image_Logger')) {
-                AI_Product_Image_Logger::log('Ошибка: не найден processed-файл для товара ' . $product_id . ': ' . $image_path);
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Ошибка: не найден processed-файл для товара ' . $product_id . ': ' . $image_path);
             }
             return false;
         }
@@ -134,7 +177,8 @@ class AI_Product_Image_Product_Helper {
         if (!$product) {
             self::set_error($product_id, 'Товар не найден: ' . $product_id);
             if (class_exists('AI_Product_Image_Logger')) {
-                AI_Product_Image_Logger::log('Ошибка: товар не найден ' . $product_id);
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Ошибка: товар не найден ' . $product_id);
             }
             return false;
         }
@@ -145,7 +189,8 @@ class AI_Product_Image_Product_Helper {
         if ($upload['error']) {
             self::set_error($product_id, 'Ошибка загрузки файла: ' . $upload['error']);
             if (class_exists('AI_Product_Image_Logger')) {
-                AI_Product_Image_Logger::log('Ошибка загрузки файла для товара ' . $product_id . ': ' . $upload['error']);
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Ошибка загрузки файла для товара ' . $product_id . ': ' . $upload['error']);
             }
             return false;
         }
@@ -167,14 +212,16 @@ class AI_Product_Image_Product_Helper {
             if ($prev_image_id) set_post_thumbnail($product_id, $prev_image_id);
             self::set_error($product_id, 'Не удалось установить обработанное изображение как основное. Откат выполнен.');
             if (class_exists('AI_Product_Image_Logger')) {
-                AI_Product_Image_Logger::log('Ошибка: не удалось установить processed-изображение для товара ' . $product_id . '. Откат выполнен.');
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Ошибка: не удалось установить processed-изображение для товара ' . $product_id . '. Откат выполнен.', 'error');
             }
             return false;
         }
         self::set_status($product_id, 'applied');
         self::set_error($product_id, '');
         if (class_exists('AI_Product_Image_Logger')) {
-            AI_Product_Image_Logger::log('Успешно применено processed-изображение для товара ' . $product_id . ': ' . $image_path);
+            $logger = AI_Product_Image_Plugin::get_instance()->logger;
+            $logger->log('Успешно применено processed-изображение для товара ' . $product_id . ': ' . $image_path);
         }
         return true;
     }

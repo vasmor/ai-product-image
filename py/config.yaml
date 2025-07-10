@@ -9,8 +9,10 @@ logs_dir: uploads/ai_image/logs
 batch_size: 10
 max_image_size: 4096
 log_level: INFO
-font_bold: uploads/ai_image/fonts/Inter-Bold.ttf
-font_semibold: uploads/ai_image/fonts/Inter-SemiBold.ttf
-font_regular: uploads/ai_image/fonts/Inter-Regular.ttf
-wp_api_url: "https://your-site.com/wp-json/ai-image/v1/set-processing"
-wp_api_secret: "your_secret_key" 
+wp_api_url: "https://market.royaltyres.ru/wp-json/ai-image/v1/set-processing"
+wp_api_secret: "your_secret_key"
+
+# --- Параметры удалённого rembg ---
+rembg_url: "http://127.0.0.1:80"   # Адрес nginx/reverse proxy rembg
+rembg_user: "user1"                # Логин для Basic Auth
+rembg_pass: "password"             # Пароль для Basic Auth 

@@ -182,3 +182,132 @@ pip install -r py/requirements.txt
 ---
 
 **Проект готов к промышленной эксплуатации. Все инструкции и параметры приведены в документации. При необходимости обратитесь к файлам `plan-ai-plugin.md`, `DEPLOYMENT_PLAN.md` и `state/plugin_status.md` для расширенных сценариев и восстановления.** 
+
+## Переход на удалённое удаление фона через rembg (cloud/self-hosted)
+
+### 1. Развёртывание rembg на облачном сервере (детально) — **ВЫПОЛНЕНО**
+
+- rembg установлен в виртуальном окружении на облачном сервере.
+- Все зависимости установлены через `pip install "rembg[cli]"`.
+- Сервер rembg успешно запущен на порту 7000 (`rembg s --host 0.0.0.0 --port 7000`).
+- Проверено, что порт 7000 слушается и API доступен для обработки изображений.
+- Получение и сохранение результата через Postman протестировано.
+
+## 2. Ограничить доступ к API (детально) — **ВЫПОЛНЕНО ✔**
+
+**Реализация:**
+- Установлен и запущен nginx на сервере.
+- Создан отдельный конфиг для rembg в `/etc/nginx/sites-available/rembg` с reverse proxy на порт 7000.
+- В конфиге включена Basic Auth:
+  - Добавлены строки:
+    ```nginx
+    auth_basic "Restricted Area";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+    ```
+- Сгенерирован файл паролей `/etc/nginx/.htpasswd` с помощью команды:
+  ```bash
+  sudo htpasswd -c /etc/nginx/.htpasswd <user>
+  ```
+- Символическая ссылка на конфиг создана в `/etc/nginx/sites-enabled/`.
+- Конфигурация nginx проверена (`sudo nginx -t`) и применена (`sudo systemctl reload nginx`).
+- Проверена работа авторизации через браузер и curl:
+  - Без авторизации — 401 Unauthorized.
+  - С авторизацией — доступ к API rembg.
+
+**Итог:**
+Доступ к API rembg теперь защищён логином и паролем (Basic Auth). Без авторизации никто не сможет воспользоваться сервисом. Дополнительные ограничения не требуются.
+
+### 3. Модифицировать пайплайн Python
+
+3.1. **Найти место вызова локального rembg**
+- В файле `py/ai_image_processor.py` найти строку:
+  ```python
+  # tire_img_nobg = remove(tire_img)
+  ```
+  или
+  ```python
+  from rembg import remove
+  tire_img_nobg = remove(tire_img)
+  ```
+- Это локальный вызов удаления фона.
+
+3.2. **Реализовать функцию отправки изображения на удалённый rembg через HTTP POST**
+- Добавить функцию, которая:
+  - Принимает PIL.Image (или путь к файлу)
+  - Отправляет изображение на сервер rembg через HTTP POST (`/api/remove`)
+  - Получает результат (изображение без фона)
+  - Возвращает PIL.Image
+
+**Пример функции:**
+```python
+import requests
+import io
+from PIL import Image
+
+def remove_bg_rembg_remote(img: Image.Image, rembg_url: str, username: str = None, password: str = None) -> Image.Image:
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    headers = {}
+    auth = (username, password) if username and password else None
+    response = requests.post(
+        f"{rembg_url}/api/remove",
+        files={'image': ('image.png', buf, 'image/png')},
+        headers=headers,
+        auth=auth,
+        timeout=120
+    )
+    response.raise_for_status()
+    return Image.open(io.BytesIO(response.content)).convert('RGBA')
+```
+
+3.3. **Заменить локальный вызов rembg на удалённый**
+- Вместо:
+  ```python
+  tire_img_nobg = remove(tire_img)
+  ```
+- Использовать:
+  ```python
+  tire_img_nobg = remove_bg_rembg_remote(
+      tire_img,
+      rembg_url="http://<ip>:80",  # или https://<ip> если настроен HTTPS
+      username="user1",            # ваш логин
+      password="password"          # ваш пароль
+  )
+  ```
+
+3.4. **Добавить обработку ошибок**
+- Обернуть вызов в try/except, чтобы корректно логировать ошибки сети или авторизации.
+
+3.5. **(Опционально) Вынести параметры rembg_url, username, password в config.yaml**
+- Добавить в `config.yaml`:
+  ```yaml
+  rembg_url: "http://<ip>:80"
+  rembg_user: "user1"
+  rembg_pass: "password"
+  ```
+- В коде читать эти параметры из конфига.
+
+3.6. **Протестировать пайплайн**
+- Запустить обработку тестового изображения.
+- Проверить, что фон удаляется через удалённый rembg, а не локально.
+- Проверить обработку ошибок (например, неправильный пароль, недоступен сервер).
+
+3.7. **(Опционально) Отключить/удалить импорт локального rembg**
+- Если полностью переходите на удалённый сервис, можно удалить строку:
+  ```python
+  from rembg import remove
+  ```
+
+3.8. **Обновить README.md**
+- Описать новый способ интеграции с rembg через HTTP.
+- Привести пример кода и параметры для настройки.
+
+4. **Тестирование**
+   - Проверить удаление фона на тестовых изображениях.
+   - Оценить скорость, стабильность, качество.
+
+5. **Документирование**
+   - Описать адрес сервиса, параметры, ограничения, инструкции по обновлению/перезапуску.
+
+> В процессе реализации этого перехода данный раздел будет дополняться и актуализироваться с примерами кода, инструкциями по развертыванию и использованием. 

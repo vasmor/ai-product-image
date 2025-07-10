@@ -72,6 +72,18 @@ function ai_product_image_admin_page() {
         }
     }
 
+    // Обработка ручного удаления файла задачи
+    if (isset($_POST['delete_task_file']) && check_admin_referer('ai_image_delete_task_action', 'ai_image_delete_task_nonce')) {
+        $task_id = sanitize_text_field($_POST['delete_task_file']);
+        $task_file = wp_upload_dir()['basedir'] . '/ai_image/tasks/' . $task_id . '.json';
+        if (file_exists($task_file)) {
+            unlink($task_file);
+            echo '<div class="notice notice-success"><p>Файл задачи ' . esc_html($task_id) . ' удалён.</p></div>';
+        } else {
+            echo '<div class="notice notice-error"><p>Файл задачи не найден: ' . esc_html($task_id) . '</p></div>';
+        }
+    }
+
     $tab = isset($_GET['tab']) ? $_GET['tab'] : 'tasks';
     echo '<h2 class="nav-tab-wrapper">';
     echo '<a href="?page=ai-product-image&tab=tasks" class="nav-tab' . ($tab=='tasks'?' nav-tab-active':'') . '">Очередь</a>';
@@ -99,7 +111,7 @@ function ai_product_image_admin_page() {
                 } else {
                     set_transient('ai_image_processing_lock', 1, 60*10);
                     $tm = new AI_Product_Image_Task_Manager();
-                    $ok = $tm->create_task_for_product($product_id);
+                    $ok = $tm->create_task_for_product($product_id, ['force' => $force]);
                     if ($ok) {
                         // TODO: после завершения обработки записать _ai_image_processed
                         $result_msg = '<div class="notice notice-success"><p>Задача на обработку товара отправлена!</p></div>';
@@ -147,7 +159,8 @@ function ai_product_image_admin_page() {
                     $tm = new AI_Product_Image_Task_Manager();
                     $created = 0;
                     foreach ($product_ids as $pid) {
-                        if ($tm->create_task_for_product($pid)) {
+                        $ok = $tm->create_task_for_product($pid, ['force' => false]);
+                        if ($ok) {
                             $created++;
                         }
                     }
@@ -341,9 +354,10 @@ function ai_product_image_admin_page() {
             'applied' => 0,
             'error' => 0,
             'pending' => 0,
+            'stuck' => 0,
         ];
         foreach ($tasks as $task) {
-            $pid = isset($task['task_id']) && preg_match('/_(\d+)$/', $task['task_id'], $m) ? intval($m[1]) : 0;
+            $pid = !empty($task['product_id']) ? intval($task['product_id']) : (isset($task['task_id']) && preg_match('/_(\d+)$/', $task['task_id'], $m) ? intval($m[1]) : 0);
             $status = $pid ? AI_Product_Image_Product_Helper::get_status($pid) : ($task['status'] ?? 'pending');
             if (!isset($status_counts[$status])) $status_counts[$status] = 0;
             $status_counts[$status]++;
@@ -360,6 +374,7 @@ function ai_product_image_admin_page() {
                 'applied' => '#008000',
                 'error' => '#d63638',
                 'pending' => '#cccccc',
+                'stuck' => '#ff9900',
             ][$status] ?? '#ccc';
             echo '<div style="text-align:center;">';
             echo '<div style="background:' . $color . ';width:40px;height:' . (max(10, $count*2)) . 'px;border-radius:6px 6px 0 0;margin-bottom:5px;"></div>';
@@ -371,13 +386,96 @@ function ai_product_image_admin_page() {
         // Алерты по ошибкам и зависшим задачам
         $error_tasks = $status_counts['error'] ?? 0;
         $processing_tasks = $status_counts['processing'] ?? 0;
+        $stuck_tasks = $status_counts['stuck'] ?? 0;
         if ($error_tasks > 0) {
             echo '<div style="margin-top:20px;padding:10px 20px;background:#ffd2d2;color:#a00;border-radius:5px;font-weight:bold;">Внимание: есть задачи со статусом "error" (' . $error_tasks . ')</div>';
+        }
+        if ($stuck_tasks > 0) {
+            echo '<div style="margin-top:10px;padding:10px 20px;background:#fff3cd;color:#856404;border-radius:5px;font-weight:bold;">Внимание: есть зависшие результаты (stuck) — ' . $stuck_tasks . ' задач(и)</div>';
         }
         if ($processing_tasks > 0) {
             echo '<div style="margin-top:10px;padding:10px 20px;background:#e6f7ff;color:#0073aa;border-radius:5px;font-weight:bold;">В обработке: ' . $processing_tasks . ' задач(и)</div>';
         }
         echo '<div style="margin-top:30px;color:#888;">Всего задач: ' . $total . '</div>';
+
+        // --- Выводим зависшие результаты (stuck) ---
+        $upload_dir = wp_upload_dir();
+        $results_dir = trailingslashit($upload_dir['basedir']) . 'ai_image/results/';
+        $stuck_results = [];
+        foreach (glob($results_dir . '*.json') as $file) {
+            $json = file_get_contents($file);
+            $data = json_decode($json, true);
+            if (!$data) continue;
+            $attempts = isset($data['attempts']) ? intval($data['attempts']) : 0;
+            if (($data['status'] ?? '') === 'stuck' || $attempts >= 5) {
+                $stuck_results[] = [
+                    'task_id' => $data['task_id'] ?? '',
+                    'product_id' => $data['product_id'] ?? '',
+                    'sku' => $data['product_data']['sku'] ?? '',
+                    'error' => $data['error'] ?? '',
+                    'attempts' => $attempts,
+                ];
+            }
+        }
+        // --- Обработка действий для stuck ---
+        if (isset($_POST['stuck_action']) && check_admin_referer('ai_image_stuck_action', 'ai_image_stuck_nonce')) {
+            $task_id = sanitize_text_field($_POST['stuck_task_id'] ?? '');
+            $product_id = intval($_POST['stuck_product_id'] ?? 0);
+            $action = sanitize_text_field($_POST['stuck_action']);
+            $results_dir = wp_upload_dir()['basedir'] . '/ai_image/results/';
+            $file = $results_dir . $task_id . '.json';
+            if ($action === 'repeat' && $product_id) {
+                // Сбросить attempts, статус queued, создать новую задачу
+                if (file_exists($file)) {
+                    $json = file_get_contents($file);
+                    $data = json_decode($json, true);
+                    if ($data) {
+                        $data['attempts'] = 0;
+                        $data['status'] = 'queued';
+                        $data['error'] = '';
+                        file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+                        AI_Product_Image_Product_Helper::set_status($product_id, 'queued');
+                        $tm = new AI_Product_Image_Task_Manager();
+                        $tm->create_task_for_product($product_id, ['force' => true]);
+                        echo '<div class="notice notice-success"><p>Попытка повторной обработки для товара #' . $product_id . ' инициирована.</p></div>';
+                    }
+                }
+            } elseif ($action === 'delete') {
+                if (file_exists($file)) {
+                    unlink($file);
+                    echo '<div class="notice notice-success"><p>Файл результата ' . esc_html($task_id) . ' удалён.</p></div>';
+                } else {
+                    echo '<div class="notice notice-error"><p>Файл результата не найден: ' . esc_html($task_id) . '</p></div>';
+                }
+            }
+        }
+        if (!empty($stuck_results)) {
+            echo '<div style="margin-top:30px;">';
+            echo '<h3 style="color:#ff9900;">Зависшие результаты (stuck)</h3>';
+            echo '<table class="widefat"><thead><tr><th>Task ID</th><th>SKU</th><th>Product ID</th><th>Ошибка</th><th>Попыток</th><th>Действия</th></tr></thead><tbody>';
+            foreach ($stuck_results as $res) {
+                echo '<tr>';
+                echo '<td>' . esc_html($res['task_id']) . '</td>';
+                echo '<td>' . esc_html($res['sku']) . '</td>';
+                echo '<td>' . esc_html($res['product_id']) . '</td>';
+                echo '<td>' . esc_html($res['error']) . '</td>';
+                echo '<td>' . esc_html($res['attempts']) . '</td>';
+                echo '<td>';
+                // Форма для действий
+                echo '<form method="post" style="display:inline;">';
+                wp_nonce_field('ai_image_stuck_action', 'ai_image_stuck_nonce');
+                echo '<input type="hidden" name="stuck_task_id" value="' . esc_attr($res['task_id']) . '">';
+                echo '<input type="hidden" name="stuck_product_id" value="' . esc_attr($res['product_id']) . '">';
+                echo '<button type="submit" name="stuck_action" value="repeat" class="button">Повторить попытку</button> ';
+                echo '<button type="submit" name="stuck_action" value="delete" class="button" onclick="return confirm(\'Удалить файл результата?\')">Удалить результат</button>';
+                echo '</form>';
+                echo '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+            echo '<div style="color:#888;font-size:12px;margin-top:8px;">Файл результата не будет удалён, пока не будет предпринято действие вручную или не изменится логика обработки.</div>';
+            echo '</div>';
+        }
         return;
     }
 
@@ -385,6 +483,20 @@ function ai_product_image_admin_page() {
     if (isset($_GET['view_log'])) {
         $task_id = sanitize_text_field($_GET['view_log']);
         $log_file = WP_CONTENT_DIR . '/uploads/ai_image/logs/processor.log';
+        if (isset($_GET['ajax']) && $_GET['ajax'] == '1') {
+            header('Content-Type: text/plain; charset=utf-8');
+            if (file_exists($log_file)) {
+                $lines = file($log_file);
+                $filtered = array_filter($lines, function($line) use ($task_id) {
+                    return strpos($line, $task_id) !== false;
+                });
+                $last = array_slice($filtered, -100);
+                echo esc_html(implode('', $last));
+            } else {
+                echo 'Лог-файл не найден.';
+            }
+            exit;
+        }
         echo '<div class="wrap"><h2>Лог обработки для задачи ' . esc_html($task_id) . '</h2>';
         if (file_exists($log_file)) {
             $lines = file($log_file);
@@ -431,9 +543,18 @@ function ai_product_image_admin_page() {
             <label for="filter_status">Статус: </label>
             <select name="filter_status" id="filter_status">
                 <option value="">Все</option>
-                <option value="queued" 
+                <option value="queued">queued</option>
+                <option value="task_created">task_created</option>
+                <option value="processing">processing</option>
+                <option value="processed">processed</option>
+                <option value="applied">applied</option>
+                <option value="error">error</option>
+                <option value="pending">pending</option>
+            </select>
+            <input type="submit" class="button" value="Фильтровать">
+        </form>
         <form method="post" id="ai-image-task-bulk-actions" style="margin-bottom: 10px;">
-            <input type="hidden" name="ai_image_bulk_action_nonce" value="
+            <?php wp_nonce_field('ai_image_bulk_action_action', 'ai_image_bulk_action_nonce'); ?>
         <table class="widefat">
             <thead>
                 <tr>
@@ -451,7 +572,7 @@ function ai_product_image_admin_page() {
             <?php else :
                 foreach ( $tasks_to_show as $task ) :
                     $result = $task_manager->get_result( $task['task_id'] ?? '' );
-                    $pid = isset($task['task_id']) && preg_match('/_(\d+)$/', $task['task_id'], $m) ? intval($m[1]) : 0;
+                    $pid = !empty($task['product_id']) ? intval($task['product_id']) : (isset($task['task_id']) && preg_match('/_(\d+)$/', $task['task_id'], $m) ? intval($m[1]) : 0);
                     $status = $pid ? AI_Product_Image_Product_Helper::get_status($pid) : ($task['status'] ?? '');
                     $error = $pid ? AI_Product_Image_Product_Helper::get_error($pid) : '';
             ?>
@@ -461,6 +582,10 @@ function ai_product_image_admin_page() {
                         <td>
                             <?php
                             $status_label = $status ?: ($result['status'] ?? $task['status'] ?? 'pending');
+                            $allowed_statuses = ['queued','task_created','processing','processed','applied','error','pending'];
+                            if (!in_array($status_label, $allowed_statuses)) {
+                                $status_label = 'unknown';
+                            }
                             $status_colors = [
                                 'queued' => '#888',
                                 'task_created' => '#0073aa',
@@ -469,6 +594,7 @@ function ai_product_image_admin_page() {
                                 'applied' => '#008000',
                                 'error' => '#d63638',
                                 'pending' => '#cccccc',
+                                'unknown' => '#ff9900',
                             ];
                             $status_icons = [
                                 'queued' => '⏳',
@@ -478,9 +604,10 @@ function ai_product_image_admin_page() {
                                 'applied' => '🖼️',
                                 'error' => '❌',
                                 'pending' => '⏸️',
+                                'unknown' => '❓',
                             ];
                             $color = $status_colors[$status_label] ?? '#cccccc';
-                            $icon = $status_icons[$status_label] ?? '⏸️';
+                            $icon = $status_icons[$status_label] ?? '❓';
                             $tooltip = [
                                 'queued' => 'В очереди',
                                 'task_created' => 'Задача создана',
@@ -489,6 +616,7 @@ function ai_product_image_admin_page() {
                                 'applied' => 'Изображение применено',
                                 'error' => 'Ошибка',
                                 'pending' => 'Ожидание',
+                                'unknown' => 'Неизвестный статус',
                             ][$status_label] ?? $status_label;
                             ?>
                             <span title="<?php echo esc_attr($tooltip); ?>" style="display:inline-block;min-width:24px;color:<?php echo esc_attr($color); ?>;font-size:18px;vertical-align:middle;">
@@ -515,6 +643,16 @@ function ai_product_image_admin_page() {
                                 <?php wp_nonce_field('ai_image_repeat_process_action', 'ai_image_repeat_process_nonce'); ?>
                                 <button type="submit" name="repeat_process_product_id" value="<?php echo esc_attr($pid); ?>" class="button button-primary">Повторить обработку</button>
                             <?php endif; ?>
+                            <?php
+                            // Кнопка для ручного удаления файла задачи
+                            $task_file = wp_upload_dir()['basedir'] . '/ai_image/tasks/' . ($task['task_id'] ?? '') . '.json';
+                            if (file_exists($task_file)) {
+                                echo '<form method="post" style="display:inline;">';
+                                wp_nonce_field('ai_image_delete_task_action', 'ai_image_delete_task_nonce');
+                                echo '<button type="submit" name="delete_task_file" value="' . esc_attr($task['task_id']) . '" class="button" onclick="return confirm(\'Удалить файл задачи?\')">Удалить задачу</button>';
+                                echo '</form>';
+                            }
+                            ?>
                         </td>
                     </tr>
                 <?php endforeach;
@@ -547,6 +685,7 @@ function ai_product_image_admin_page() {
         </div>
     </div>
     <script>
+    var ajaxurl = '<?php echo admin_url('admin-ajax.php'); ?>';
     document.addEventListener('DOMContentLoaded', function() {
         // Preview modal
         document.querySelectorAll('.ai-image-preview-btn').forEach(function(btn) {
@@ -563,7 +702,7 @@ function ai_product_image_admin_page() {
         document.querySelectorAll('.ai-image-log-btn').forEach(function(btn) {
             btn.addEventListener('click', function() {
                 var taskId = btn.getAttribute('data-task');
-                fetch('?page=ai-product-image&tab=tasks&view_log=' + encodeURIComponent(taskId) + '&ajax=1')
+                fetch(ajaxurl + '?action=ai_image_view_log&task_id=' + encodeURIComponent(taskId))
                     .then(r => r.text())
                     .then(txt => {
                         document.getElementById('ai-image-modal-log-content').textContent = txt;

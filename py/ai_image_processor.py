@@ -4,7 +4,7 @@ from loguru import logger
 from pathlib import Path
 import yaml
 from jsonschema import validate, ValidationError
-from rembg import remove
+# from rembg import remove  # Удаляем импорт локального rembg
 from PIL import Image, ImageDraw, ImageFont
 import cv2
 import numpy as np
@@ -203,7 +203,7 @@ def draw_specs(draw, main_text, rim_text, width, height, font_path_semibold, fon
         rim_text, font=rim_font, fill=WHITE, anchor='ms'
     )
 
-def draw_index_box(draw, value, width, height, bg_color, x, y, font_path_bold, WHITE, debug_logging=False):
+def draw_index_box(draw, value, width, height, x, y, font_path_bold, WHITE, debug_logging=False):
     box_w = int(width * COEFF['index_box_w'])
     box_h = int(height * COEFF['index_box_h'])
     num_font = get_font(int(width * 0.0629), font_path_bold)
@@ -466,15 +466,17 @@ def remove_logo_lama(img, mask_salient, mask_auto, debug_path_prefix=None):
         logger.error(f'# LAMA_API_PATCH: Ошибка lama-cleaner API: {e}\n{tb}')
         raise RuntimeError(f'lama-cleaner API error: {e}\n{tb}')
 
-
-
 def remove_logo_from_object(img, mask_path=None, logo_removal_method='runwayml', debug_path_prefix=None, params=None):
     if img.mode != 'RGBA':
         img = img.convert('RGBA')
     if logo_removal_method == 'runwayml':
-        prompt = params.get('runwayml_prompt', 'Remove any object overlapping the main subject (if present), including logos and watermarks. After removal, realistically restore the main image. The main subject is a car tire on a wheel, standing vertically. Do not change, alter, distort, or remove any markings, symbols, texts, numbers, or labels present on the tire sidewalls, the tire itself, or the wheel. Improve the image quality. Output: a single car tire on a wheel, standing vertically.') if params else 'Remove any object overlapping the main subject (if present), including logos and watermarks. After removal, realistically restore the main image. The main subject is a car tire on a wheel, standing vertically. Do not change, alter, distort, or remove any markings, symbols, texts, numbers, or labels present on the tire sidewalls, the tire itself, or the wheel. Improve the image quality. Output: a single car tire on a wheel, standing vertically.'
-        api_key = params.get('runwayml_api_key') if params else None
-        logger.info(f"Удаление логотипа методом: runwayml, prompt={prompt}")
+        prompt = None
+        if params and params.get('runwayml_prompt'):
+            prompt = params.get('runwayml_prompt')
+        else:
+            prompt = 'Remove any object overlapping the main subject (if present), including logos and watermarks. After removal, realistically restore the main image. The main subject is a car tire on a wheel, standing vertically. Do not change, alter, distort, or remove any markings, symbols, texts, numbers, or labels present on the tire sidewalls, the tire itself, or the wheel. Improve the image quality. Output: a single car tire on a wheel, standing vertically.'
+        api_key = str(params.get('runwayml_api_key')) if params and params.get('runwayml_api_key') is not None else None
+        logger.info(f"Удаление логотипа и фона методом: runwayml, prompt={prompt}")
         logger.info(f"API-ключ из params: {'передан' if api_key else 'НЕ передан'}")
         if not api_key:
             logger.error("API-ключ RunwayML не передан!")
@@ -509,6 +511,7 @@ def remove_logo_runwayml(img, prompt, api_key, debug_path_prefix=None):
         logger.error("[RunwayML] SDK RunwayML не установлен. Установите: pip install runwayml")
         raise RuntimeError("SDK RunwayML не установлен. Установите: pip install runwayml")
     
+    api_key = str(api_key) if api_key is not None else ''
     masked_key = (api_key[:5] + '...' + str(len(api_key))) if api_key else '(none)'
     logger.info(f"[RunwayML] Используется API-ключ: {masked_key}")
     
@@ -618,6 +621,50 @@ def setup_logging(debug_mode=False):
     loguru_logger.add(str(LOGS_DIR / 'errors.log'), rotation='1 week', retention='4 weeks', level='ERROR')
     return loguru_logger
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# Добавляем функцию для удалённого rembg
+
+def remove_bg_rembg_remote(img: Image.Image, rembg_url: str, username: str = None, password: str = None) -> Image.Image:
+    import io
+    import requests
+    from PIL import Image
+    import logging
+    if img is None:
+        logger.error('[rembg] Передано пустое изображение (None)')
+        raise ValueError('Передано пустое изображение (None)')
+    if not isinstance(img, Image.Image):
+        logger.error(f'[rembg] Передан не объект PIL.Image.Image, а {type(img)}')
+        raise TypeError(f'Ожидался PIL.Image.Image, а получено: {type(img)}')
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    logger.info(f'[rembg] Размер изображения для отправки: {buf.getbuffer().nbytes} байт, mode={img.mode}, size={img.size}')
+    # Временно сохраняем для отладки
+    try:
+        img.save('debug_rembg_input.png')
+    except Exception as e:
+        logger.warning(f'[rembg] Не удалось сохранить debug_rembg_input.png: {e}')
+    auth = (username, password) if username and password else None
+    try:
+        response = requests.post(
+            f"{rembg_url}/api/remove",
+            files={'file': ('image.png', buf, 'image/png')},
+            auth=auth,
+            timeout=120
+        )
+        logger.info(f'[rembg] Ответ rembg: {response.status_code}, длина: {len(response.content)} байт')
+        response.raise_for_status()
+        result_img = Image.open(io.BytesIO(response.content)).convert('RGBA')
+        # Временно сохраняем результат для отладки
+        try:
+            result_img.save('debug_rembg_output.png')
+        except Exception as e:
+            logger.warning(f'[rembg] Не удалось сохранить debug_rembg_output.png: {e}')
+        return result_img
+    except Exception as e:
+        logger.error(f'[rembg] Ошибка при обращении к rembg: {e}')
+        raise
+
 # --- Основная функция обработки ---
 def process_image(task):
     """
@@ -635,9 +682,9 @@ def process_image(task):
         logo_removal_method = get_param('logo_removal_method', 'opencv')
         logger.info(f"[PROCESS] Запуск обработки изображения. Метод удаления логотипа: {logo_removal_method}")
         # Пути к файлам
-        orig_path = ORIGINALS_DIR / Path(task['original_image']).name
-        background_path = TEMPLATES_DIR / Path(task['template']).name
-        output_path = PROCESSED_DIR / Path(task['output_filename']).name
+        orig_path = ORIGINALS_DIR / Path(str(task['original_image'])).name
+        background_path = TEMPLATES_DIR / Path(str(task['template'])).name
+        output_path = PROCESSED_DIR / Path(str(task['output_filename'])).name
         FONT_PATH_BOLD = resolve_font_path(get_param('font_bold', 'Inter-Bold.ttf'))
         FONT_PATH_SEMIBOLD = resolve_font_path(get_param('font_semibold', 'Inter-SemiBold.ttf'))
         FONT_PATH_REGULAR = resolve_font_path(get_param('font_regular', 'Inter-Regular.ttf'))
@@ -651,19 +698,23 @@ def process_image(task):
         ]:
             if p and not os.path.exists(p):
                 logger.error(f"Файл {label} не найден: {p}")
-                return None
+                return None, None
         # Цвета
         WHITE = get_param('color_white', '#FFFFFF')
         BLACK = get_param('color_black', '#222222')
         # Данные товара
         pd = task['product_data']
-        BRAND = pd.get('brand', '')
-        MODEL = pd.get('model', '')
-        WIDTH_PROFILE = pd.get('width', '')
-        HEIGHT_PROFILE = pd.get('height', '')
-        RIM = pd.get('diameter', '')
-        LOAD_IDX = pd.get('load_index', '')
-        SPEED_IDX = pd.get('speed_index', '')
+        BRAND = str(pd.get('brand', ''))
+        MODEL = str(pd.get('model', ''))
+        WIDTH_PROFILE = str(pd.get('width', ''))
+        HEIGHT_PROFILE = str(pd.get('height', ''))
+        RIM = str(pd.get('diameter', ''))
+        LOAD_IDX = str(pd.get('load_index', ''))
+        SPEED_IDX = str(pd.get('speed_index', ''))
+        sku = pd.get('sku')
+        if not sku:
+            logger.error('[PROCESS] В задаче отсутствует sku, обработка невозможна!')
+            return None, None
 
         # === SUPER SAMPLING/POSTPROCESSING ===
         SUPER_SAMPLING_FACTOR = 3  # Можно увеличить до 3 для очень высоких требований
@@ -672,7 +723,6 @@ def process_image(task):
         # === SUPER SAMPLING/POSTPROCESSING ===
 
         # 1. Загружаем и подгоняем фон по размеру (Суперсэмплинг)
-        # background = Image.open(background_path).convert('RGBA').resize((width, height), Image.LANCZOS)
         background = Image.open(background_path).convert('RGBA').resize((width_ss, height_ss), Image.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
         img = background.copy()
         draw = ImageDraw.Draw(img)
@@ -688,29 +738,54 @@ def process_image(task):
                 debug_path_prefix=(str(output_path).replace('.', '_debug1') if debug_logging else None),
                 params=params
             )
+            # --- Сохраняем gallery-версию runwayml-изображения (до rembg/crop) ---
+            gallery_filename = f'product_{sku}_ai-gallery.png'
+            gallery_output_path = PROCESSED_DIR / gallery_filename
+            tire_img_to_save = tire_img
+            if str(gallery_output_path).lower().endswith((".jpg", ".jpeg")) and tire_img.mode == 'RGBA':
+                tire_img_to_save = tire_img.convert('RGB')
+            gallery_output_path.parent.mkdir(parents=True, exist_ok=True)
+            tire_img_to_save.save(gallery_output_path, quality=100, subsampling=0)
+            logger.info(f'[SAVE] Gallery-версия runwayml сохранена: {gallery_output_path}')
+            if debug_logging:
+                debug_path = str(gallery_output_path).replace('.', '_debug_runwayml.')
+                img_to_save = tire_img
+                if debug_path.lower().endswith((".jpg", ".jpeg")) and tire_img.mode == 'RGBA':
+                    img_to_save = tire_img.convert('RGB')
+                img_to_save.save(debug_path)
             if debug_logging:
                 debug_path = str(output_path).replace('.', '_debug2_nologo.')
                 img_to_save = tire_img
-                if debug_path.lower().endswith(('.jpg', '.jpeg')) and tire_img.mode == 'RGBA':
+                if debug_path.lower().endswith((".jpg", ".jpeg")) and tire_img.mode == 'RGBA':
                     img_to_save = tire_img.convert('RGB')
                 img_to_save.save(debug_path)
-            logger.info("[PROCESS] Удаление фона...")
-            # Удаляем фон и конвертируем в RGBA для сохранения прозрачности
-            tire_img_nobg = remove(tire_img)
-            if tire_img_nobg.mode != 'RGBA':
-                tire_img_nobg = tire_img_nobg.convert('RGBA')
-            if debug_logging:
-                debug_path = str(output_path).replace('.', '_debug3_nobg.')
-                img_to_save = tire_img_nobg
-                if debug_path.lower().endswith(('.jpg', '.jpeg')) and tire_img_nobg.mode == 'RGBA':
-                    img_to_save = tire_img_nobg.convert('RGB')
-                img_to_save.save(debug_path)
-            logger.info("[PROCESS] Обрезка по содержимому...")
+            # --- Новый вызов удалённого rembg ---
+            rembg_url = get_param('rembg_url')
+            rembg_user = get_param('rembg_user')
+            rembg_pass = get_param('rembg_pass')
+            if rembg_url:
+                logger.info(f"[PROCESS] Удаление фона через удалённый rembg: {rembg_url}")
+                try:
+                    tire_img_nobg = remove_bg_rembg_remote(tire_img, rembg_url, rembg_user, rembg_pass)
+                except Exception as e:
+                    logger.error(f"Ошибка при удалении фона через rembg: {e}")
+                    return None, None
+                if tire_img_nobg.mode != 'RGBA':
+                    tire_img_nobg = tire_img_nobg.convert('RGBA')
+                if debug_logging:
+                    debug_path = str(output_path).replace('.', '_debug3_nobg.')
+                    img_to_save = tire_img_nobg
+                    if debug_path.lower().endswith((".jpg", ".jpeg")) and tire_img_nobg.mode == 'RGBA':
+                        img_to_save = tire_img_nobg.convert('RGB')
+                    img_to_save.save(debug_path)
+            else:
+                logger.error("rembg_url не задан в config.yaml или params задачи!")
+                return None, None
             tire_img_crop = crop_to_content(tire_img_nobg)
             if debug_logging:
                 debug_path = str(output_path).replace('.', '_debug4_crop.')
                 img_to_save = tire_img_crop
-                if debug_path.lower().endswith(('.jpg', '.jpeg')) and tire_img_crop.mode == 'RGBA':
+                if debug_path.lower().endswith((".jpg", ".jpeg")) and tire_img_crop.mode == 'RGBA':
                     img_to_save = tire_img_crop.convert('RGB')
                 img_to_save.save(debug_path)
 
@@ -751,37 +826,37 @@ def process_image(task):
         img = img.resize((width, height), Image.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # --- Сохранение результата ---
-        output_filename = task['output_filename']
+        output_filename = str(task['output_filename'])
         if '/' in output_filename or '\\' in output_filename:
             final_output_path = PROCESSED_DIR / Path(output_filename).name
         else:
             final_output_path = PROCESSED_DIR / output_filename
 
-        logger.info(f'[SAVE] Подготовка к сохранению: {final_output_path}')
-        logger.info(f'[SAVE] Тип img: {type(img)}')
-        logger.info(f'[SAVE] Размер img: {img.size if img else "None"}')
-        logger.info(f'[SAVE] Режим img: {img.mode if img else "None"}')
-
-        if img is None:
-            logger.error('[SAVE] Ошибка: img равен None!')
-            return None
-
+        # Сохраняем основное изображение
         img_to_save = img
         if str(final_output_path).lower().endswith(('.jpg', '.jpeg')) and img.mode == 'RGBA':
             img_to_save = img.convert('RGB')
             logger.info('[SAVE] Конвертирован в RGB для JPG')
-
         final_output_path.parent.mkdir(parents=True, exist_ok=True)
-
         img_to_save.save(final_output_path, quality=100, subsampling=0)
         logger.info(f'[SAVE] Файл сохранен: {final_output_path}')
         logger.info(f'[SAVE] Размер файла: {final_output_path.stat().st_size if final_output_path.exists() else "файл не найден"}')
-
         logger.info(f'Результат задачи {task["task_id"]} сохранён: {final_output_path}')
-        return str(final_output_path.relative_to(PROCESSED_DIR.parent))
+
+        # --- Сохраняем gallery-версию runwayml-изображения ---
+        # gallery_filename = f'product_{sku}_ai-gallery.png'
+        # gallery_output_path = PROCESSED_DIR / gallery_filename
+        # img_to_save.save(gallery_output_path, quality=100, subsampling=0)
+        # logger.info(f'[SAVE] Gallery-версия сохранена: {gallery_output_path}')
+
+        # --- Формируем относительный путь для output_image ---
+        rel_output_image = str(final_output_path.relative_to(PROJECT_ROOT / "uploads" / "ai_image"))
+        rel_gallery_image = str(gallery_output_path.relative_to(PROJECT_ROOT / "uploads" / "ai_image"))
+
+        return rel_output_image, rel_gallery_image
     except Exception as e:
         logger.error(f"[PROCESS] Ошибка обработки изображения: {e}")
-        return None
+        return None, None
 
 def notify_wp_processing(task_id, config):
     url = config.get('wp_api_url')
@@ -808,12 +883,16 @@ def process_task(task_path):
         notify_wp_processing(task_id, config)
         if not ok:
             logger.error(f'Ошибка валидации задачи {task_id}: {err}')
+            # --- Удаляем файл задачи после ошибки ---
+            if os.path.exists(task_path):
+                os.remove(task_path)
             return
         logger.info(f'Обработка задачи {task_id}')
         error_msg = None
         output_image = None
+        gallery_image = None
         try:
-            output_image = process_image(task)
+            output_image, gallery_image = process_image(task)
         except Exception as e:
             import traceback
             error_msg = str(e) + '\n' + traceback.format_exc()
@@ -821,8 +900,10 @@ def process_task(task_path):
         status = 'success' if output_image else 'error'
         result = {
             'task_id': task_id,
+            'product_id': task.get('product_id'),
             'status': status,
             'output_image': output_image,
+            'gallery_image': gallery_image,
             'message': 'OK' if output_image else (error_msg or 'Ошибка обработки'),
             'started_at': '',
             'finished_at': '',
@@ -831,12 +912,33 @@ def process_task(task_path):
         result_path = RESULTS_DIR / f'{task_id}.json'
         with open(result_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
+        # --- Удаляем файл задачи после обработки ---
+        if os.path.exists(task_path):
+            os.remove(task_path)
     except Exception as e:
         logger.error(f'Ошибка при обработке {task_path}: {e}')
 
 def main():
     task_files = list(TASKS_DIR.glob('*.json'))[:BATCH_SIZE]
     for task_file in task_files:
+        # 1. Проверяем статус processing
+        try:
+            with open(task_file, 'r', encoding='utf-8') as f:
+                task = json.load(f)
+        except Exception as e:
+            logger.error(f"[LOCK] Ошибка чтения задачи {task_file}: {e}")
+            continue
+        if task.get('processing'):
+            continue  # Уже в обработке
+        # 2. Ставим статус processing (атомарно)
+        task['processing'] = True
+        try:
+            with open(task_file, 'w', encoding='utf-8') as f:
+                json.dump(task, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"[LOCK] Ошибка записи processing в задачу {task_file}: {e}")
+            continue
+        # 3. Обрабатываем задачу
         process_task(task_file)
 
 if __name__ == '__main__':

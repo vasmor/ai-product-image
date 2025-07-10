@@ -56,4 +56,22 @@ add_filter('wp_check_filetype_and_ext', function($data, $file, $filename, $mimes
         $data['proper_filename'] = $filename;
     }
     return $data;
-}, 10, 4); 
+}, 10, 4);
+
+add_action('wp_ajax_ai_image_view_log', 'ai_image_view_log_callback');
+function ai_image_view_log_callback() {
+    $task_id = sanitize_text_field($_GET['task_id'] ?? '');
+    $log_file = WP_CONTENT_DIR . '/uploads/ai_image/logs/processor.log';
+    header('Content-Type: text/plain; charset=utf-8');
+    if (file_exists($log_file)) {
+        $lines = file($log_file);
+        $filtered = array_filter($lines, function($line) use ($task_id) {
+            return strpos($line, $task_id) !== false;
+        });
+        $last = array_slice($filtered, -100);
+        echo esc_html(implode('', $last));
+    } else {
+        echo 'Лог-файл не найден.';
+    }
+    wp_die();
+} 
