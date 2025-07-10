@@ -151,20 +151,37 @@ function ai_product_image_admin_page() {
             if (get_transient('ai_image_processing_lock')) {
                 $mass_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
             } else {
-                $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit);
                 $only_instock = get_option('ai_image_only_instock', 0);
                 if ($only_instock) {
                     $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, true);
                 } else {
                     $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, false);
                 }
-                if (empty($product_ids)) {
+                // --- Фильтрация по статусу ---
+                $filtered_ids = [];
+                if (!empty($selected_statuses)) {
+                    foreach ($product_ids as $pid) {
+                        $status = AI_Product_Image_Product_Helper::get_status($pid);
+                        if (in_array($status, $selected_statuses)) {
+                            $filtered_ids[] = $pid;
+                        }
+                    }
+                } else {
+                    // Если ни один чекбокс не выбран — только товары без статуса
+                    foreach ($product_ids as $pid) {
+                        $status = AI_Product_Image_Product_Helper::get_status($pid);
+                        if ($status === '' || is_null($status)) {
+                            $filtered_ids[] = $pid;
+                        }
+                    }
+                }
+                if (empty($filtered_ids)) {
                     $mass_msg = '<div class="notice notice-warning"><p>Нет товаров для обработки по выбранному фильтру.</p></div>';
                 } else {
                     set_transient('ai_image_processing_lock', 1, 60*30);
                     $tm = new AI_Product_Image_Task_Manager();
                     $created = 0;
-                    foreach ($product_ids as $pid) {
+                    foreach ($filtered_ids as $pid) {
                         $ok = $tm->create_task_for_product($pid, ['force' => false]);
                         if ($ok) {
                             $created++;
@@ -195,12 +212,27 @@ function ai_product_image_admin_page() {
                 <tr>
                     <th>Статусы для массовой обработки</th>
                     <td>
-                        <label><input type="checkbox" name="mass_status[]" value="queued" <?php checked(in_array('queued', $selected_statuses)); ?>> queued</label>
-                        <label><input type="checkbox" name="mass_status[]" value="error" <?php checked(in_array('error', $selected_statuses)); ?>> error</label>
-                        <label><input type="checkbox" name="mass_status[]" value="task_created" <?php checked(in_array('task_created', $selected_statuses)); ?>> task_created</label>
-                        <label><input type="checkbox" name="mass_status[]" value="processing" <?php checked(in_array('processing', $selected_statuses)); ?>> processing</label>
-                        <label><input type="checkbox" name="mass_status[]" value="processed" <?php checked(in_array('processed', $selected_statuses)); ?>> processed</label>
-                        <label><input type="checkbox" name="mass_status[]" value="applied" <?php checked(in_array('applied', $selected_statuses)); ?>> applied</label>
+                        <?php
+                        // Подсчёт количества товаров по статусам
+                        $status_labels = [
+                            'queued' => 'queued',
+                            'error' => 'error',
+                            'task_created' => 'task_created',
+                            'processing' => 'processing',
+                            'processed' => 'processed',
+                            'applied' => 'applied',
+                        ];
+                        $status_counts = array_fill_keys(array_keys($status_labels), 0);
+                        $all_mass_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, -1, get_option('ai_image_only_instock', 0));
+                        foreach ($all_mass_ids as $pid) {
+                            $st = AI_Product_Image_Product_Helper::get_status($pid);
+                            if (isset($status_counts[$st])) $status_counts[$st]++;
+                        }
+                        foreach ($status_labels as $status => $label) {
+                            $count = $status_counts[$status];
+                            echo '<label style="margin-right:12px;"><input type="checkbox" name="mass_status[]" value="' . esc_attr($status) . '" ' . (in_array($status, $selected_statuses) ? 'checked' : '') . '> ' . esc_html($label) . ' <span style="font-size:11px;color:#888;">(' . $count . ')</span></label>';
+                        }
+                        ?>
                     </td>
                 </tr>
             </table>
