@@ -531,25 +531,53 @@ function ai_product_image_admin_page() {
             $action = sanitize_text_field($_POST['stuck_action']);
             $results_dir = wp_upload_dir()['basedir'] . '/ai_image/results/';
             $file = $results_dir . $task_id . '.json';
-            if ($action === 'repeat' && $product_id) {
-                // Сбросить attempts, статус queued, создать новую задачу
+            $tm = new AI_Product_Image_Task_Manager();
+            if ($action === 'repeat_apply' && $product_id) {
+                // Повторить попытку применения результата (без AI)
                 if (file_exists($file)) {
                     $json = file_get_contents($file);
                     $data = json_decode($json, true);
                     if ($data) {
                         $data['attempts'] = 0;
                         $data['status'] = 'queued';
-                        $data['error'] = '';
+                        $data['error'] = 'Повтор применения результата инициирован вручную администратором в ' . date('Y-m-d H:i:s');
                         file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
                         AI_Product_Image_Product_Helper::set_status($product_id, 'queued');
-                        $tm = new AI_Product_Image_Task_Manager();
-                        $tm->create_task_for_product($product_id, ['force' => true]);
-                        echo '<div class="notice notice-success"><p>Попытка повторной обработки для товара #' . $product_id . ' инициирована.</p></div>';
+                        AI_Product_Image_Product_Helper::set_error($product_id, $data['error']);
+                        if (class_exists('AI_Product_Image_Logger')) {
+                            $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                            $logger->log('Повтор применения результата (stuck) инициирован вручную для товара ' . $product_id . ', task_id=' . $task_id, 'info');
+                        }
+                        echo '<div class="notice notice-success"><p>Попытка повторного применения результата для товара #' . $product_id . ' инициирована.</p></div>';
                     }
+                }
+            } elseif ($action === 'repeat_full' && $product_id) {
+                // Повторить обработку (AI): удалить результат, создать новую задачу
+                if (file_exists($file)) {
+                    unlink($file);
+                    if (class_exists('AI_Product_Image_Logger')) {
+                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                        $logger->log('Результат stuck удалён вручную для товара ' . $product_id . ', task_id=' . $task_id, 'info');
+                    }
+                }
+                $ok = $tm->create_task_for_product($product_id, ['force' => true]);
+                if ($ok) {
+                    if (class_exists('AI_Product_Image_Logger')) {
+                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                        $logger->log('Повторная обработка (stuck) инициирована вручную для товара ' . $product_id . ', task_id=' . $task_id, 'info');
+                    }
+                    AI_Product_Image_Product_Helper::set_error($product_id, 'Повторная обработка инициирована вручную администратором в ' . date('Y-m-d H:i:s'));
+                    echo '<div class="notice notice-success"><p>Задача на повторную обработку товара #' . $product_id . ' создана!</p></div>';
+                } else {
+                    echo '<div class="notice notice-error"><p>Ошибка создания задачи для товара #' . $product_id . '.</p></div>';
                 }
             } elseif ($action === 'delete') {
                 if (file_exists($file)) {
                     unlink($file);
+                    if (class_exists('AI_Product_Image_Logger')) {
+                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                        $logger->log('Результат stuck удалён вручную (delete) для task_id=' . $task_id, 'info');
+                    }
                     echo '<div class="notice notice-success"><p>Файл результата ' . esc_html($task_id) . ' удалён.</p></div>';
                 } else {
                     echo '<div class="notice notice-error"><p>Файл результата не найден: ' . esc_html($task_id) . '</p></div>';
@@ -561,6 +589,19 @@ function ai_product_image_admin_page() {
             echo '<h3 style="color:#ff9900;">Зависшие результаты (stuck)</h3>';
             echo '<table class="widefat"><thead><tr><th>Task ID</th><th>SKU</th><th>Product ID</th><th>Ошибка</th><th>Попыток</th><th>Действия</th></tr></thead><tbody>';
             foreach ($stuck_results as $res) {
+                $result_file = $results_dir . ($res['task_id'] ?? '') . '.json';
+                $output_image = '';
+                $original_exists = false;
+                if (file_exists($result_file)) {
+                    $data = json_decode(file_get_contents($result_file), true);
+                    $output_image = $data['output_image'] ?? '';
+                    $sku = $data['product_data']['sku'] ?? '';
+                    $norm_sku = $data['product_data']['norm_sku'] ?? '';
+                    $originals_dir = trailingslashit(wp_upload_dir()['basedir']) . 'ai_image/originals/';
+                    $pattern = $originals_dir . $norm_sku . '-*';
+                    $files = glob($pattern);
+                    $original_exists = $files && count($files) > 0;
+                }
                 echo '<tr>';
                 echo '<td>' . esc_html($res['task_id']) . '</td>';
                 echo '<td>' . esc_html($res['sku']) . '</td>';
@@ -568,12 +609,15 @@ function ai_product_image_admin_page() {
                 echo '<td>' . esc_html($res['error']) . '</td>';
                 echo '<td>' . esc_html($res['attempts']) . '</td>';
                 echo '<td>';
-                // Форма для действий
                 echo '<form method="post" style="display:inline;">';
                 wp_nonce_field('ai_image_stuck_action', 'ai_image_stuck_nonce');
                 echo '<input type="hidden" name="stuck_task_id" value="' . esc_attr($res['task_id']) . '">';
                 echo '<input type="hidden" name="stuck_product_id" value="' . esc_attr($res['product_id']) . '">';
-                echo '<button type="submit" name="stuck_action" value="repeat" class="button">Повторить попытку</button> ';
+                if ($output_image && $original_exists) {
+                    echo '<button type="submit" name="stuck_action" value="repeat_apply" class="button">Повторить применение</button> ';
+                } else {
+                    echo '<button type="submit" name="stuck_action" value="repeat_full" class="button button-primary">Повторить обработку</button> ';
+                }
                 echo '<button type="submit" name="stuck_action" value="delete" class="button" onclick="return confirm(\'Удалить файл результата?\')">Удалить результат</button>';
                 echo '</form>';
                 echo '</td>';
