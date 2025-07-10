@@ -148,6 +148,17 @@ function ai_product_image_admin_page() {
     if ($tab === 'mass') {
         $mass_msg = '';
         $runwayml_prompt = trim(get_option('ai_image_runwayml_prompt', ''));
+        // Корректное определение $category_id и $mass_limit
+        if (isset($_POST['mass_category_id'])) {
+            $category_id = intval($_POST['mass_category_id']);
+        } else {
+            $category_id = (int)get_option('ai_image_tires_category_id', 0);
+        }
+        if (isset($_POST['mass_limit'])) {
+            $mass_limit = intval($_POST['mass_limit']);
+        } else {
+            $mass_limit = 100;
+        }
         // Корректное определение $selected_statuses
         if (isset($_POST['mass_start'])) {
             $selected_statuses = isset($_POST['mass_status']) && is_array($_POST['mass_status'])
