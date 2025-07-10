@@ -365,6 +365,27 @@ function ai_product_image_admin_page() {
     }
 
     if ($tab === 'dashboard') {
+        // --- Общая статистика обработки шин ---
+        $tires_cat_id = (int)get_option('ai_image_tires_category_id', 0);
+        $only_instock = get_option('ai_image_only_instock', 0);
+        $all_tire_ids = [];
+        if ($tires_cat_id) {
+            $all_tire_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($tires_cat_id, -1, $only_instock);
+        }
+        $total_tires = count($all_tire_ids);
+        $applied_tires = 0;
+        foreach ($all_tire_ids as $pid) {
+            if (AI_Product_Image_Product_Helper::get_status($pid) === 'applied') {
+                $applied_tires++;
+            }
+        }
+        $left_tires = $total_tires - $applied_tires;
+        echo '<div style="margin:30px 0 20px 0;padding:18px 24px;background:#f8f8f8;border-radius:8px;max-width:500px;">';
+        echo '<h3 style="margin-top:0;">Общая статистика обработки шин</h3>';
+        echo '<div style="font-size:18px;margin-bottom:8px;">Всего подлежит обработке: <b>' . $total_tires . '</b></div>';
+        echo '<div style="color:#008000;font-size:16px;">Обработано: <b>' . $applied_tires . '</b></div>';
+        echo '<div style="color:#d63638;font-size:16px;">Осталось: <b>' . $left_tires . '</b></div>';
+        echo '</div>';
         // Считаем задачи по статусам
         $status_counts = [
             'queued' => 0,
