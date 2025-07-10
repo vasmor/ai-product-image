@@ -221,7 +221,11 @@ class AI_Product_Image_Task_Manager {
             ], $settings)
         ];
         // Копируем оригинал в originals/
-        $this->backup_original_image($image_path, basename($image_path));
+        if ($sku) {
+            $original_name = basename($image_path);
+            $original_with_sku = $sku . '-' . $original_name;
+            $this->backup_original_image($image_path, $original_with_sku);
+        }
         // Сохраняем задачу в tasks/
         $file = $this->tasks_dir . $task_id . '.json';
         $json = json_encode($task, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);

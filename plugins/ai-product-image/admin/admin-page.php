@@ -91,6 +91,7 @@ function ai_product_image_admin_page() {
     echo '<a href="?page=ai-product-image&tab=mass" class="nav-tab' . ($tab=='mass'?' nav-tab-active':'') . '">Массовая обработка</a>';
     echo '<a href="?page=ai-product-image&tab=settings" class="nav-tab' . ($tab=='settings'?' nav-tab-active':'') . '">Настройки</a>';
     echo '<a href="?page=ai-product-image&tab=dashboard" class="nav-tab' . ($tab=='dashboard'?' nav-tab-active':'') . '">Мониторинг</a>';
+    echo '<a href="?page=ai-product-image&tab=restore" class="nav-tab' . ($tab=='restore'?' nav-tab-active':'') . '">Восстановление оригиналов</a>';
     echo '</h2>';
 
     if ($tab === 'single') {
@@ -580,6 +581,87 @@ function ai_product_image_admin_page() {
             echo '<div style="color:#888;font-size:12px;margin-top:8px;">Файл результата не будет удалён, пока не будет предпринято действие вручную или не изменится логика обработки.</div>';
             echo '</div>';
         }
+        return;
+    }
+
+    if ($tab === 'restore') {
+        $restore_msg = '';
+        // Обработка восстановления
+        if (isset($_POST['restore_originals']) && check_admin_referer('ai_image_restore_originals_action', 'ai_image_restore_originals_nonce')) {
+            $skus = array_filter(array_map('trim', preg_split('/[\s,]+/', $_POST['restore_skus'] ?? '')));
+            $keep_gallery = !empty($_POST['keep_gallery']);
+            $results = [];
+            foreach ($skus as $sku) {
+                $originals_dir = trailingslashit(wp_upload_dir()['basedir']) . 'ai_image/originals/';
+                $files = glob($originals_dir . $sku . '-*');
+                if (!$files) {
+                    $results[] = "[{$sku}] Оригинал не найден.";
+                    continue;
+                }
+                $file = $files[0];
+                $product_id = wc_get_product_id_by_sku($sku);
+                if (!$product_id) {
+                    $results[] = "[{$sku}] Товар не найден.";
+                    continue;
+                }
+                // Загрузить оригинал в медиабиблиотеку и установить как основное
+                $upload = wp_upload_bits(basename($file), null, file_get_contents($file));
+                if ($upload['error']) {
+                    $results[] = "[{$sku}] Ошибка загрузки: {$upload['error']}";
+                    continue;
+                }
+                $wp_filetype = wp_check_filetype($upload['file'], null);
+                $attachment = [
+                    'post_mime_type' => $wp_filetype['type'],
+                    'post_title'     => sanitize_file_name(basename($upload['file'])),
+                    'post_content'   => '',
+                    'post_status'    => 'inherit'
+                ];
+                $attach_id = wp_insert_attachment($attachment, $upload['file'], 0);
+                require_once(ABSPATH . 'wp-admin/includes/image.php');
+                $attach_data = wp_generate_attachment_metadata($attach_id, $upload['file']);
+                wp_update_attachment_metadata($attach_id, $attach_data);
+                set_post_thumbnail($product_id, $attach_id);
+                // Удалить из галереи, если чекбокс не отмечен
+                if (!$keep_gallery) {
+                    $gallery_ids = get_post_meta($product_id, '_product_image_gallery', true);
+                    $gallery_ids_arr = $gallery_ids ? explode(',', $gallery_ids) : [];
+                    $gallery_ids_arr = array_diff($gallery_ids_arr, [$attach_id]);
+                    update_post_meta($product_id, '_product_image_gallery', implode(',', array_filter($gallery_ids_arr)));
+                }
+                $results[] = "[{$sku}] Восстановлено успешно.";
+            }
+            $restore_msg = '<div class="notice notice-info"><p>' . implode('<br>', $results) . '</p></div>';
+        }
+        // Обработка удаления всех оригиналов
+        if (isset($_POST['delete_all_originals']) && check_admin_referer('ai_image_restore_originals_action', 'ai_image_restore_originals_nonce')) {
+            $originals_dir = trailingslashit(wp_upload_dir()['basedir']) . 'ai_image/originals/';
+            $files = glob($originals_dir . '*');
+            $deleted = 0;
+            foreach ($files as $f) {
+                if (is_file($f) && unlink($f)) $deleted++;
+            }
+            $restore_msg = '<div class="notice notice-warning"><p>Удалено оригинальных изображений: ' . $deleted . '</p></div>';
+        }
+        ?>
+        <h2>Восстановление оригинальных изображений</h2>
+        <?php echo $restore_msg; ?>
+        <form method="post">
+            <?php wp_nonce_field('ai_image_restore_originals_action', 'ai_image_restore_originals_nonce'); ?>
+            <table class="form-table">
+                <tr>
+                    <th><label for="restore_skus">SKU товара(ов)</label></th>
+                    <td><textarea name="restore_skus" id="restore_skus" rows="3" cols="60" placeholder="Введите один или несколько sku через запятую, пробел или с новой строки"></textarea></td>
+                </tr>
+                <tr>
+                    <th>Опции</th>
+                    <td><label><input type="checkbox" name="keep_gallery" value="1"> Не удалять изображения галереи</label></td>
+                </tr>
+            </table>
+            <p><input type="submit" name="restore_originals" class="button button-primary" value="Восстановить изображения">
+            <input type="submit" name="delete_all_originals" class="button button-secondary" value="Удалить все оригинальные изображения" onclick="return confirm('Удалить все оригинальные изображения?');"></p>
+        </form>
+        <?php
         return;
     }
 

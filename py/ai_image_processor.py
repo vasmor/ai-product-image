@@ -218,12 +218,29 @@ def draw_index_box(draw, value, width, height, x, y, font_path_bold, WHITE, debu
     draw.text((cx, cy), value, font=num_font, fill=WHITE, anchor='lt')
 
 def draw_tire(img, tire_img, width, height):
-    tire_width = int(width * COEFF['tire_w'])
-    tire_height = int(height * COEFF['tire_h'])
+    tire_w = int(width * COEFF['tire_w'])
+    tire_h = int(height * COEFF['tire_h'])
     x = int(width * COEFF['tire_x'])
     y = int(height * COEFF['tire_y'])
-    tire_resized = tire_img.resize((tire_width, tire_height), Image.LANCZOS)
-    img.paste(tire_resized, (x, y), tire_resized)
+    # --- Новая логика вписывания с сохранением пропорций ---
+    orig_w, orig_h = tire_img.size
+    rect_w, rect_h = tire_w, tire_h
+    aspect_orig = orig_w / orig_h
+    aspect_rect = rect_w / rect_h
+    if aspect_orig < aspect_rect:
+        # Изображение более "высокое" — вписываем по высоте
+        new_h = rect_h
+        new_w = int(orig_w * (rect_h / orig_h))
+        offset_x = x + (rect_w - new_w) // 2
+        offset_y = y
+    else:
+        # Изображение более "широкое" — вписываем по ширине
+        new_w = rect_w
+        new_h = int(orig_h * (rect_w / orig_w))
+        offset_x = x
+        offset_y = y + (rect_h - new_h)
+    tire_resized = tire_img.resize((new_w, new_h), Image.LANCZOS)
+    img.paste(tire_resized, (offset_x, offset_y), tire_resized)
 
 # --- Вспомогательные функции ---
 def crop_to_content(img):
