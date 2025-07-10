@@ -216,6 +216,7 @@ class AI_Product_Image_Task_Manager {
                 'height' => get_option('ai_image_height', 826),
                 'logo_removal_method' => 'runwayml',
                 'runwayml_api_key' => get_option('ai_image_runwayml_api_key', ''),
+                'runwayml_prompt' => get_option('ai_image_runwayml_prompt', ''),
                 'debug_logging' => $debug_logging ? true : false,
             ], $settings)
         ];

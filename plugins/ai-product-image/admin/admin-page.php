@@ -95,30 +95,33 @@ function ai_product_image_admin_page() {
 
     if ($tab === 'single') {
         $result_msg = '';
+        $runwayml_prompt = trim(get_option('ai_image_runwayml_prompt', ''));
         if (isset($_POST['single_process'])) {
-            $product_id = intval($_POST['single_product_id']);
-            $force = !empty($_POST['single_force_reprocess']);
-            if (get_transient('ai_image_processing_lock')) {
-                $result_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
-            } elseif (!$product_id || get_post_type($product_id) !== 'product') {
-                $result_msg = '<div class="notice notice-error"><p>Товар не найден.</p></div>';
-            } elseif (!AI_Product_Image_Product_Helper::product_in_category_tree($product_id, (int)get_option('ai_image_tires_category_id', 0))) {
-                $result_msg = '<div class="notice notice-error"><p>Товар не относится к нужной категории.</p></div>';
+            if ($runwayml_prompt === '') {
+                $result_msg = '<div class="notice notice-error"><p>Промпт для RunwayML не заполнен! Заполните его в настройках.</p></div>';
             } else {
-                $already_processed = get_post_meta($product_id, '_ai_image_processed', true);
-                if ($already_processed && !$force) {
-                    $result_msg = '<div class="notice notice-warning"><p>Товар уже обработан. Для повторной обработки отметьте чекбокс.</p></div>';
+                if (get_transient('ai_image_processing_lock')) {
+                    $result_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
+                } elseif (!$product_id || get_post_type($product_id) !== 'product') {
+                    $result_msg = '<div class="notice notice-error"><p>Товар не найден.</p></div>';
+                } elseif (!AI_Product_Image_Product_Helper::product_in_category_tree($product_id, (int)get_option('ai_image_tires_category_id', 0))) {
+                    $result_msg = '<div class="notice notice-error"><p>Товар не относится к нужной категории.</p></div>';
                 } else {
-                    set_transient('ai_image_processing_lock', 1, 60*10);
-                    $tm = new AI_Product_Image_Task_Manager();
-                    $ok = $tm->create_task_for_product($product_id, ['force' => $force]);
-                    if ($ok) {
-                        // TODO: после завершения обработки записать _ai_image_processed
-                        $result_msg = '<div class="notice notice-success"><p>Задача на обработку товара отправлена!</p></div>';
+                    $already_processed = get_post_meta($product_id, '_ai_image_processed', true);
+                    if ($already_processed && !$force) {
+                        $result_msg = '<div class="notice notice-warning"><p>Товар уже обработан. Для повторной обработки отметьте чекбокс.</p></div>';
                     } else {
-                        $result_msg = '<div class="notice notice-error"><p>Ошибка создания задачи.</p></div>';
+                        set_transient('ai_image_processing_lock', 1, 60*10);
+                        $tm = new AI_Product_Image_Task_Manager();
+                        $ok = $tm->create_task_for_product($product_id, ['force' => $force]);
+                        if ($ok) {
+                            // TODO: после завершения обработки записать _ai_image_processed
+                            $result_msg = '<div class="notice notice-success"><p>Задача на обработку товара отправлена!</p></div>';
+                        } else {
+                            $result_msg = '<div class="notice notice-error"><p>Ошибка создания задачи.</p></div>';
+                        }
+                        delete_transient('ai_image_processing_lock');
                     }
-                    delete_transient('ai_image_processing_lock');
                 }
             }
         }
@@ -144,57 +147,53 @@ function ai_product_image_admin_page() {
     }
     if ($tab === 'mass') {
         $mass_msg = '';
+        $runwayml_prompt = trim(get_option('ai_image_runwayml_prompt', ''));
         if (isset($_POST['mass_start'])) {
-            $selected_statuses = isset($_POST['mass_status']) && is_array($_POST['mass_status'])
-                ? array_map('sanitize_text_field', $_POST['mass_status'])
-                : [];
-        } else {
-            $selected_statuses = ['queued','error'];
-        }
-        $category_id = isset($_POST['mass_category_id']) ? intval($_POST['mass_category_id']) : (int)get_option('ai_image_tires_category_id', 0);
-        $mass_limit = isset($_POST['mass_limit']) ? intval($_POST['mass_limit']) : 100;
-        if (isset($_POST['mass_start'])) {
-            if (get_transient('ai_image_processing_lock')) {
-                $mass_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
+            if ($runwayml_prompt === '') {
+                $mass_msg = '<div class="notice notice-error"><p>Промпт для RunwayML не заполнен! Заполните его в настройках.</p></div>';
             } else {
-                $only_instock = get_option('ai_image_only_instock', 0);
-                if ($only_instock) {
-                    $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, true);
+                if (get_transient('ai_image_processing_lock')) {
+                    $mass_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
                 } else {
-                    $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, false);
-                }
-                // --- Фильтрация по статусу ---
-                $filtered_ids = [];
-                if (!empty($selected_statuses)) {
-                    foreach ($product_ids as $pid) {
-                        $status = AI_Product_Image_Product_Helper::get_status($pid);
-                        if (in_array($status, $selected_statuses)) {
-                            $filtered_ids[] = $pid;
+                    $only_instock = get_option('ai_image_only_instock', 0);
+                    if ($only_instock) {
+                        $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, true);
+                    } else {
+                        $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, false);
+                    }
+                    // --- Фильтрация по статусу ---
+                    $filtered_ids = [];
+                    if (!empty($selected_statuses)) {
+                        foreach ($product_ids as $pid) {
+                            $status = AI_Product_Image_Product_Helper::get_status($pid);
+                            if (in_array($status, $selected_statuses)) {
+                                $filtered_ids[] = $pid;
+                            }
+                        }
+                    } else {
+                        // Если ни один чекбокс не выбран — только товары без статуса
+                        foreach ($product_ids as $pid) {
+                            $status = AI_Product_Image_Product_Helper::get_status($pid);
+                            if ($status === '' || is_null($status)) {
+                                $filtered_ids[] = $pid;
+                            }
                         }
                     }
-                } else {
-                    // Если ни один чекбокс не выбран — только товары без статуса
-                    foreach ($product_ids as $pid) {
-                        $status = AI_Product_Image_Product_Helper::get_status($pid);
-                        if ($status === '' || is_null($status)) {
-                            $filtered_ids[] = $pid;
+                    if (empty($filtered_ids)) {
+                        $mass_msg = '<div class="notice notice-warning"><p>Нет товаров для обработки по выбранному фильтру.</p></div>';
+                    } else {
+                        set_transient('ai_image_processing_lock', 1, 60*30);
+                        $tm = new AI_Product_Image_Task_Manager();
+                        $created = 0;
+                        foreach ($filtered_ids as $pid) {
+                            $ok = $tm->create_task_for_product($pid, ['force' => false]);
+                            if ($ok) {
+                                $created++;
+                            }
                         }
+                        $mass_msg = '<div class="notice notice-success"><p>Массовая обработка запущена для ' . $created . ' товаров.</p></div>';
+                        delete_transient('ai_image_processing_lock');
                     }
-                }
-                if (empty($filtered_ids)) {
-                    $mass_msg = '<div class="notice notice-warning"><p>Нет товаров для обработки по выбранному фильтру.</p></div>';
-                } else {
-                    set_transient('ai_image_processing_lock', 1, 60*30);
-                    $tm = new AI_Product_Image_Task_Manager();
-                    $created = 0;
-                    foreach ($filtered_ids as $pid) {
-                        $ok = $tm->create_task_for_product($pid, ['force' => false]);
-                        if ($ok) {
-                            $created++;
-                        }
-                    }
-                    $mass_msg = '<div class="notice notice-success"><p>Массовая обработка запущена для ' . $created . ' товаров.</p></div>';
-                    delete_transient('ai_image_processing_lock');
                 }
             }
         }
@@ -342,6 +341,13 @@ function ai_product_image_admin_page() {
                     <td>
                         <input type="password" name="ai_image_runwayml_api_key" value="<?php echo esc_attr(get_option('ai_image_runwayml_api_key', '')); ?>" autocomplete="off" style="width: 350px;">
                         <p class="description">Введите ваш персональный API-ключ RunwayML. Ключ хранится в базе данных WordPress.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th><span style="color:red">*</span> Промпт для RunwayML</th>
+                    <td>
+                        <textarea name="ai_image_runwayml_prompt" rows="7" cols="80" style="width:100%;max-width:700px;min-height:120px;" required><?php echo esc_textarea(get_option('ai_image_runwayml_prompt', '')); ?></textarea>
+                        <p class="description">Обязательное поле. Промпт будет передаваться в RunwayML для генерации изображений. Пример: <br><code>Remove any object overlapping the main subject (if present), including logos and watermarks. ...</code></p>
                     </td>
                 </tr>
                 <tr><th colspan="2"><b>Метод удаления логотипа</b></th></tr>
