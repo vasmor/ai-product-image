@@ -148,6 +148,14 @@ function ai_product_image_admin_page() {
     if ($tab === 'mass') {
         $mass_msg = '';
         $runwayml_prompt = trim(get_option('ai_image_runwayml_prompt', ''));
+        // Корректное определение $selected_statuses
+        if (isset($_POST['mass_start'])) {
+            $selected_statuses = isset($_POST['mass_status']) && is_array($_POST['mass_status'])
+                ? array_map('sanitize_text_field', $_POST['mass_status'])
+                : [];
+        } else {
+            $selected_statuses = ['queued','error'];
+        }
         if (isset($_POST['mass_start'])) {
             if ($runwayml_prompt === '') {
                 $mass_msg = '<div class="notice notice-error"><p>Промпт для RunwayML не заполнен! Заполните его в настройках.</p></div>';
