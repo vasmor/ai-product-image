@@ -690,6 +690,82 @@ function ai_product_image_admin_page() {
             }
             $restore_msg = '<div class="notice notice-warning"><p>Удалено оригинальных изображений: ' . $deleted . '</p></div>';
         }
+        // --- Новый функционал: Применить результат по SKU ---
+        if (isset($_POST['apply_processed_result']) && check_admin_referer('ai_image_apply_processed_action', 'ai_image_apply_processed_nonce')) {
+            $skus = array_filter(array_map('trim', preg_split('/[\s,]+/', $_POST['apply_skus'] ?? '')));
+            $results = [];
+            foreach ($skus as $sku) {
+                $norm_sku = AI_Product_Image_Product_Helper::normalize_sku($sku);
+                $processed_dir = trailingslashit(wp_upload_dir()['basedir']) . 'ai_image/processed/';
+                // Основное изображение: без gallery в имени
+                $main_files = glob($processed_dir . '*'.$norm_sku.'*.*');
+                $main_file = '';
+                foreach ($main_files as $f) {
+                    if (stripos(basename($f), 'gallery') === false && preg_match('/\.(jpg|jpeg|png)$/i', $f)) {
+                        $main_file = $f;
+                        break;
+                    }
+                }
+                // Галерея: с gallery в имени
+                $gallery_files = glob($processed_dir . '*'.$norm_sku.'*gallery*.*');
+                $gallery_file = '';
+                foreach ($gallery_files as $f) {
+                    if (preg_match('/\.(jpg|jpeg|png)$/i', $f)) {
+                        $gallery_file = $f;
+                        break;
+                    }
+                }
+                $product_id = wc_get_product_id_by_sku($sku);
+                if (!$product_id) {
+                    $results[] = "[{$sku}] Товар не найден.";
+                    continue;
+                }
+                if (!$main_file || !file_exists($main_file)) {
+                    $results[] = "[{$sku}] Основное обработанное изображение не найдено.";
+                    continue;
+                }
+                // Удаляем текущее основное изображение и галерею
+                delete_post_thumbnail($product_id);
+                update_post_meta($product_id, '_product_image_gallery', '');
+                // Загружаем основное изображение
+                $upload = wp_upload_bits(basename($main_file), null, file_get_contents($main_file));
+                if ($upload['error']) {
+                    $results[] = "[{$sku}] Ошибка загрузки основного изображения: {$upload['error']}";
+                    continue;
+                }
+                $wp_filetype = wp_check_filetype($upload['file'], null);
+                $attachment = [
+                    'post_mime_type' => $wp_filetype['type'],
+                    'post_title'     => sanitize_file_name(basename($upload['file'])),
+                    'post_content'   => '',
+                    'post_status'    => 'inherit'
+                ];
+                $attach_id = wp_insert_attachment($attachment, $upload['file'], 0);
+                require_once(ABSPATH . 'wp-admin/includes/image.php');
+                $attach_data = wp_generate_attachment_metadata($attach_id, $upload['file']);
+                wp_update_attachment_metadata($attach_id, $attach_data);
+                set_post_thumbnail($product_id, $attach_id);
+                // Галерея
+                if ($gallery_file && file_exists($gallery_file)) {
+                    $upload2 = wp_upload_bits(basename($gallery_file), null, file_get_contents($gallery_file));
+                    if (!$upload2['error']) {
+                        $wp_filetype2 = wp_check_filetype($upload2['file'], null);
+                        $attachment2 = [
+                            'post_mime_type' => $wp_filetype2['type'],
+                            'post_title'     => sanitize_file_name(basename($upload2['file'])),
+                            'post_content'   => '',
+                            'post_status'    => 'inherit'
+                        ];
+                        $attach_id2 = wp_insert_attachment($attachment2, $upload2['file'], 0);
+                        $attach_data2 = wp_generate_attachment_metadata($attach_id2, $upload2['file']);
+                        wp_update_attachment_metadata($attach_id2, $attach_data2);
+                        update_post_meta($product_id, '_product_image_gallery', $attach_id2);
+                    }
+                }
+                $results[] = "[{$sku}] Применено успешно.";
+            }
+            $restore_msg = '<div class="notice notice-info"><p>' . implode('<br>', $results) . '</p></div>';
+        }
         ?>
         <h2>Восстановление оригинальных изображений</h2>
         <?php echo $restore_msg; ?>
@@ -707,6 +783,18 @@ function ai_product_image_admin_page() {
             </table>
             <p><input type="submit" name="restore_originals" class="button button-primary" value="Восстановить изображения">
             <input type="submit" name="delete_all_originals" class="button button-secondary" value="Удалить все оригинальные изображения" onclick="return confirm('Удалить все оригинальные изображения?');"></p>
+        </form>
+        <hr style="margin:30px 0;">
+        <h2>Применить результат AI-обработки по SKU</h2>
+        <form method="post">
+            <?php wp_nonce_field('ai_image_apply_processed_action', 'ai_image_apply_processed_nonce'); ?>
+            <table class="form-table">
+                <tr>
+                    <th><label for="apply_skus">SKU товара(ов)</label></th>
+                    <td><textarea name="apply_skus" id="apply_skus" rows="3" cols="60" placeholder="Введите один или несколько sku через запятую, пробел или с новой строки"></textarea></td>
+                </tr>
+            </table>
+            <p><input type="submit" name="apply_processed_result" class="button button-primary" value="Применить результат"></p>
         </form>
         <?php
         return;

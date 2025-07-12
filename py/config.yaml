@@ -7,6 +7,10 @@ processed_dir: uploads/ai_image/processed
 templates_dir: uploads/ai_image/templates
 logs_dir: uploads/ai_image/logs
 batch_size: 10
+task_interval_sec: 10
+max_task_interval_sec: 120
+success_decrease_step: 2
+success_decrease_after: 3
 max_image_size: 4096
 log_level: INFO
 wp_api_url: "https://market.royaltyres.ru/wp-json/ai-image/v1/set-processing"

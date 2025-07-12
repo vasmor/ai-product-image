@@ -197,7 +197,7 @@ class AI_Product_Image_Task_Manager {
             'template' => 'templates/' . $template_file,
             'product_data' => [
                 'sku' => $sku,
-                'norm_sku' => $norm_sku,
+                'norm_sku' => $norm_sku, // <--- обязательно добавляем norm_sku
                 'brand' => $brand,
                 'model' => $model,
                 'width' => $width,

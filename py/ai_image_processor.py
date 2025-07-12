@@ -17,6 +17,7 @@ import io
 import requests
 import importlib.util
 import base64
+import time  # Добавлен импорт для паузы между задачами
 
 # --- Явная проверка Python 3.9 и активация venv39 (только для Windows) ---
 if not (sys.version_info.major == 3 and sys.version_info.minor == 9):
@@ -54,6 +55,17 @@ PROCESSED_DIR = (PROJECT_ROOT / config['processed_dir']).resolve()
 TEMPLATES_DIR = (PROJECT_ROOT / config['templates_dir']).resolve()
 # LOGOS_DIR = (PROJECT_ROOT / config['logos_dir']).resolve()  # удалено как неиспользуемое
 BATCH_SIZE = config.get('batch_size', 10)
+
+# --- Новый параметр: интервал между задачами (сек) ---
+TASK_INTERVAL_SEC = config.get('task_interval_sec', 10)
+MIN_TASK_INTERVAL_SEC = TASK_INTERVAL_SEC
+MAX_TASK_INTERVAL_SEC = config.get('max_task_interval_sec', 120)
+SUCCESS_DECREASE_STEP = config.get('success_decrease_step', 2)
+SUCCESS_DECREASE_AFTER = config.get('success_decrease_after', 3)
+
+# --- Динамическая пауза ---
+current_pause = TASK_INTERVAL_SEC
+success_counter = 0
 
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -93,9 +105,9 @@ COEFF = {
     'season_x': 0.0639,
     'season_y': 0.7966,
     'season_y2': 0.8329,
-    'tire_w': 0.5677,
+    'tire_w': 0.6612,
     'tire_h': 0.6392,
-    'tire_x': 0.3725,
+    'tire_x': 0.3129,
     'tire_y': 0.3087,
 }
 
@@ -729,9 +741,13 @@ def process_image(task):
         LOAD_IDX = str(pd.get('load_index', ''))
         SPEED_IDX = str(pd.get('speed_index', ''))
         sku = pd.get('sku')
+        norm_sku = pd.get('norm_sku') if 'norm_sku' in pd else None
         if not sku:
             logger.error('[PROCESS] В задаче отсутствует sku, обработка невозможна!')
             return None, None
+        if not norm_sku:
+            # Если norm_sku не передан, нормализуем sku вручную
+            norm_sku = ''.join(c.lower() if c.isalnum() or c in ['-', '_'] else '' for c in sku)
 
         # === SUPER SAMPLING/POSTPROCESSING ===
         SUPER_SAMPLING_FACTOR = 3  # Можно увеличить до 3 для очень высоких требований
@@ -756,13 +772,18 @@ def process_image(task):
                 params=params
             )
             # --- Сохраняем gallery-версию runwayml-изображения (до rembg/crop) ---
-            gallery_filename = f'product_{sku}_ai-gallery.png'
+            gallery_filename = f'product_{norm_sku}_ai-gallery.jpg'
             gallery_output_path = PROCESSED_DIR / gallery_filename
             tire_img_to_save = tire_img
-            if str(gallery_output_path).lower().endswith((".jpg", ".jpeg")) and tire_img.mode == 'RGBA':
-                tire_img_to_save = tire_img.convert('RGB')
+            # Сохраняем gallery-версию только в JPG
+            if tire_img_to_save.mode in ('RGBA', 'LA'):
+                background = Image.new('RGB', tire_img_to_save.size, (255, 255, 255))
+                background.paste(tire_img_to_save, mask=tire_img_to_save.split()[-1])
+                tire_img_to_save = background
+            else:
+                tire_img_to_save = tire_img_to_save.convert('RGB')
             gallery_output_path.parent.mkdir(parents=True, exist_ok=True)
-            tire_img_to_save.save(gallery_output_path, quality=100, subsampling=0)
+            tire_img_to_save.save(gallery_output_path, format='JPEG', quality=100, subsampling=0)
             logger.info(f'[SAVE] Gallery-версия runwayml сохранена: {gallery_output_path}')
             if debug_logging:
                 debug_path = str(gallery_output_path).replace('.', '_debug_runwayml.')
@@ -844,18 +865,22 @@ def process_image(task):
 
         # --- Сохранение результата ---
         output_filename = str(task['output_filename'])
+        # Принудительно меняем расширение на .jpg
+        output_filename = Path(output_filename).with_suffix('.jpg').name
         if '/' in output_filename or '\\' in output_filename:
             final_output_path = PROCESSED_DIR / Path(output_filename).name
         else:
             final_output_path = PROCESSED_DIR / output_filename
-
-        # Сохраняем основное изображение
+        # Сохраняем основное изображение только в JPG
         img_to_save = img
-        if str(final_output_path).lower().endswith(('.jpg', '.jpeg')) and img.mode == 'RGBA':
-            img_to_save = img.convert('RGB')
-            logger.info('[SAVE] Конвертирован в RGB для JPG')
+        if img_to_save.mode in ('RGBA', 'LA'):
+            background = Image.new('RGB', img_to_save.size, (255, 255, 255))
+            background.paste(img_to_save, mask=img_to_save.split()[-1])
+            img_to_save = background
+        else:
+            img_to_save = img_to_save.convert('RGB')
         final_output_path.parent.mkdir(parents=True, exist_ok=True)
-        img_to_save.save(final_output_path, quality=100, subsampling=0)
+        img_to_save.save(final_output_path, format='JPEG', quality=100, subsampling=0)
         logger.info(f'[SAVE] Файл сохранен: {final_output_path}')
         logger.info(f'[SAVE] Размер файла: {final_output_path.stat().st_size if final_output_path.exists() else "файл не найден"}')
         logger.info(f'Результат задачи {task["task_id"]} сохранён: {final_output_path}')
@@ -936,8 +961,9 @@ def process_task(task_path):
         logger.error(f'Ошибка при обработке {task_path}: {e}')
 
 def main():
+    global current_pause, success_counter
     task_files = list(TASKS_DIR.glob('*.json'))[:BATCH_SIZE]
-    for task_file in task_files:
+    for idx, task_file in enumerate(task_files):
         # 1. Проверяем статус processing
         try:
             with open(task_file, 'r', encoding='utf-8') as f:
@@ -955,8 +981,30 @@ def main():
         except Exception as e:
             logger.error(f"[LOCK] Ошибка записи processing в задачу {task_file}: {e}")
             continue
-        # 3. Обрабатываем задачу
-        process_task(task_file)
+        # 3. Обрабатываем задачу с динамической паузой
+        try:
+            process_task(task_file)
+            success_counter += 1
+            if success_counter >= SUCCESS_DECREASE_AFTER:
+                if current_pause > MIN_TASK_INTERVAL_SEC:
+                    old_pause = current_pause
+                    current_pause = max(MIN_TASK_INTERVAL_SEC, current_pause - SUCCESS_DECREASE_STEP)
+                    logger.info(f"[DYN-PAUSE] Несколько успешных задач подряд, уменьшаем паузу: {old_pause} -> {current_pause} сек")
+                success_counter = 0
+        except Exception as e:
+            import runwayml
+            # Если ошибка связана с лимитом или соединением — увеличиваем паузу
+            if isinstance(e, (runwayml.RateLimitError, runwayml.APIConnectionError)):
+                old_pause = current_pause
+                current_pause = min(MAX_TASK_INTERVAL_SEC, current_pause * 2)
+                logger.warning(f"[DYN-PAUSE] Получен RateLimit/APIConnectionError, увеличиваем паузу: {old_pause} -> {current_pause} сек")
+                success_counter = 0
+            else:
+                logger.error(f"[DYN-PAUSE] Ошибка обработки задачи: {e}")
+        # --- Пауза между задачами, кроме последней ---
+        if idx < len(task_files) - 1:
+            logger.info(f"[PAUSE] Пауза {current_pause} сек перед следующей задачей...")
+            time.sleep(current_pause)
 
 if __name__ == '__main__':
     debug = args.debug
