@@ -28,6 +28,12 @@ class AI_Product_Image_Settings {
         add_action( 'update_option_ai_image_background_allseason', [ $this, 'copy_template_image' ], 10, 2 );
         add_action( 'update_option_ai_image_cron_enabled', [ $this, 'reschedule_cron' ], 10, 2 );
         add_action( 'update_option_ai_image_cron_time', [ $this, 'reschedule_cron' ], 10, 2 );
+        register_setting( 'ai_image_settings', 'ai_image_icon_winter' );
+        register_setting( 'ai_image_settings', 'ai_image_icon_summer' );
+        register_setting( 'ai_image_settings', 'ai_image_icon_allseason' );
+        add_action( 'update_option_ai_image_icon_winter', [ $this, 'copy_icon_image' ], 10, 2 );
+        add_action( 'update_option_ai_image_icon_summer', [ $this, 'copy_icon_image' ], 10, 2 );
+        add_action( 'update_option_ai_image_icon_allseason', [ $this, 'copy_icon_image' ], 10, 2 );
     }
 
     /**
@@ -98,6 +104,26 @@ class AI_Product_Image_Settings {
         if (!is_dir($dest_dir)) wp_mkdir_p($dest_dir);
         $ext = pathinfo($src, PATHINFO_EXTENSION);
         $dest = $dest_dir . 'background_' . $season . '.' . $ext;
+        copy($src, $dest);
+    }
+
+    public function copy_icon_image($old_value, $new_value) {
+        $option_to_season = [
+            'ai_image_icon_winter' => 'winter',
+            'ai_image_icon_summer' => 'summer',
+            'ai_image_icon_allseason' => 'allseason',
+        ];
+        $option = current_filter();
+        $option = str_replace('update_option_', '', $option);
+        $season = $option_to_season[$option] ?? '';
+        if (!$season || !$new_value) return;
+        $src = get_attached_file($new_value);
+        if (!$src || !file_exists($src)) return;
+        $upload_dir = wp_upload_dir();
+        $dest_dir = trailingslashit($upload_dir['basedir']) . 'ai_image/icons/';
+        if (!is_dir($dest_dir)) wp_mkdir_p($dest_dir);
+        $ext = pathinfo($src, PATHINFO_EXTENSION);
+        $dest = $dest_dir . 'icon_' . $season . '.' . $ext;
         copy($src, $dest);
     }
 } 

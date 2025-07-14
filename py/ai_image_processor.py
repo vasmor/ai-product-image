@@ -109,6 +109,10 @@ COEFF = {
     'tire_h': 0.6392,
     'tire_x': 0.3129,
     'tire_y': 0.3087,
+    'icon_w': 0.0871,
+    'icon_h': 0.0726,
+    'icon_x': 0.2661,
+    'icon_y': 0.79,
 }
 
 # --- Альтернативный режим восстановления шины под логотипом ---
@@ -251,7 +255,7 @@ def draw_tire(img, tire_img, width, height):
         new_h = int(orig_h * (rect_w / orig_w))
         offset_x = x
         offset_y = y + (rect_h - new_h)
-    tire_resized = tire_img.resize((new_w, new_h), Image.LANCZOS)
+    tire_resized = tire_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
     img.paste(tire_resized, (offset_x, offset_y), tire_resized)
 
 # --- Вспомогательные функции ---
@@ -576,7 +580,7 @@ def remove_logo_runwayml(img, prompt, api_key, debug_path_prefix=None):
             new_w = w
             new_h = h
         
-        img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+        img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
         logger.info(f"[RunwayML] Изображение ресайзено: {w}x{h} -> {new_w}x{new_h}")
         
         # Конвертируем ресайзенное изображение в base64 data URI
@@ -756,7 +760,7 @@ def process_image(task):
         # === SUPER SAMPLING/POSTPROCESSING ===
 
         # 1. Загружаем и подгоняем фон по размеру (Суперсэмплинг)
-        background = Image.open(background_path).convert('RGBA').resize((width_ss, height_ss), Image.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
+        background = Image.open(background_path).convert('RGBA').resize((width_ss, height_ss), Image.Resampling.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
         img = background.copy()
         draw = ImageDraw.Draw(img)
 
@@ -774,17 +778,20 @@ def process_image(task):
             # --- Сохраняем gallery-версию runwayml-изображения (до rembg/crop) ---
             gallery_filename = f'product_{norm_sku}_ai-gallery.jpg'
             gallery_output_path = PROCESSED_DIR / gallery_filename
-            tire_img_to_save = tire_img
-            # Сохраняем gallery-версию только в JPG
-            if tire_img_to_save.mode in ('RGBA', 'LA'):
-                background = Image.new('RGB', tire_img_to_save.size, (255, 255, 255))
-                background.paste(tire_img_to_save, mask=tire_img_to_save.split()[-1])
-                tire_img_to_save = background
+            if gallery_output_path.exists():
+                logger.info(f'[SAVE] Gallery-версия runwayml уже существует: {gallery_output_path}')
             else:
-                tire_img_to_save = tire_img_to_save.convert('RGB')
-            gallery_output_path.parent.mkdir(parents=True, exist_ok=True)
-            tire_img_to_save.save(gallery_output_path, format='JPEG', quality=100, subsampling=0)
-            logger.info(f'[SAVE] Gallery-версия runwayml сохранена: {gallery_output_path}')
+                tire_img_to_save = tire_img
+                # Сохраняем gallery-версию только в JPG
+                if tire_img_to_save.mode in ('RGBA', 'LA'):
+                    background = Image.new('RGB', tire_img_to_save.size, (255, 255, 255))
+                    background.paste(tire_img_to_save, mask=tire_img_to_save.split()[-1])
+                    tire_img_to_save = background
+                else:
+                    tire_img_to_save = tire_img_to_save.convert('RGB')
+                gallery_output_path.parent.mkdir(parents=True, exist_ok=True)
+                tire_img_to_save.save(gallery_output_path, format='JPEG', quality=100, subsampling=0)
+                logger.info(f'[SAVE] Gallery-версия runwayml сохранена: {gallery_output_path}')
             if debug_logging:
                 debug_path = str(gallery_output_path).replace('.', '_debug_runwayml.')
                 img_to_save = tire_img
@@ -850,6 +857,37 @@ def process_image(task):
         # Сначала применим постобработку для повышения резкости и коррекции цвета (до ресайза)
         from PIL import ImageEnhance, ImageFilter  # === SUPER SAMPLING/POSTPROCESSING ===
 
+        # --- Отрисовка иконки сезонности (если задана) ---
+        icon_path = get_param('icon_path')
+        logger.info(f'[ICON-DEBUG] icon_path из params: {icon_path}')
+        if icon_path:
+            icon_full_path = (PROJECT_ROOT / 'uploads' / 'ai_image' / icon_path).resolve()
+            logger.info(f'[ICON-DEBUG] Полный путь к иконке: {icon_full_path}')
+            if icon_full_path.exists():
+                try:
+                    icon_img = Image.open(icon_full_path).convert('RGBA')
+                    # Размеры и позиция по COEFF (с учётом суперсэмплинга)
+                    icon_w = int(width_ss * COEFF['icon_w'])
+                    icon_h = int(height_ss * COEFF['icon_h'])
+                    icon_x = int(width_ss * COEFF['icon_x'])
+                    icon_y = int(height_ss * COEFF['icon_y'])
+                    icon_img = icon_img.resize((icon_w, icon_h), Image.Resampling.LANCZOS)
+                    img.alpha_composite(icon_img, (icon_x, icon_y))
+                    logger.info(f'[ICON] Иконка сезонности отрисована: {icon_full_path}')
+                    # Если требуется сохранить иконку отдельно для отладки — сохраняем с quality=100
+                    if debug_logging:
+                        debug_icon_path = str(output_path).replace('.', '_debug_icon.')
+                        icon_img_to_save = icon_img
+                        if debug_icon_path.lower().endswith((".jpg", ".jpeg")) and icon_img.mode == 'RGBA':
+                            icon_img_to_save = icon_img.convert('RGB')
+                        icon_img_to_save.save(debug_icon_path, quality=100)
+                except Exception as e:
+                    logger.error(f'[ICON] Ошибка отрисовки иконки: {e}')
+            else:
+                logger.warning(f'[ICON] Файл иконки не найден: {icon_full_path}')
+        else:
+            logger.warning('[ICON] icon_path не передан в параметры задачи!')
+
         # Постобработка: Повышение резкости
         enhancer_sharpness = ImageEnhance.Sharpness(img)
         img = enhancer_sharpness.enhance(2)  # 1.0 - без изменений, >1 - сильнее
@@ -861,7 +899,7 @@ def process_image(task):
         # Можно добавить лёгкую фильтрацию для очистки артефактов
         img = img.filter(ImageFilter.SMOOTH_MORE)  # по желанию
 
-        img = img.resize((width, height), Image.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
+        img = img.resize((width, height), Image.Resampling.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
 
         # --- Сохранение результата ---
         output_filename = str(task['output_filename'])

@@ -94,6 +94,10 @@ class AI_Product_Image_Task_Manager {
             wp_mkdir_p( $originals_dir );
         }
         $dest = $originals_dir . $new_name;
+        // Новая проверка: если файл уже существует, ничего не делаем
+        if ( file_exists( $dest ) ) {
+            return $dest;
+        }
         if ( file_exists( $image_path ) && copy( $image_path, $dest ) ) {
             return $dest;
         }
@@ -137,6 +141,17 @@ class AI_Product_Image_Task_Manager {
             if (class_exists('AI_Product_Image_Logger')) {
                 $logger = AI_Product_Image_Plugin::get_instance()->logger;
                 $logger->log('Ошибка: у товара ' . $product_id . ' отсутствует sku, задача не создана.');
+            }
+            return false;
+        }
+        // --- Проверка наличия основного изображения ---
+        $image_id = $product->get_image_id();
+        $image_path = get_attached_file($image_id);
+        if (!$image_id || !$image_path || !file_exists($image_path)) {
+            $this->log_missing_original($sku, $product_id);
+            if (class_exists('AI_Product_Image_Logger')) {
+                $logger = AI_Product_Image_Plugin::get_instance()->logger;
+                $logger->log('Пропуск: не найдено основное изображение для товара ' . $product_id . ' (sku: ' . $sku . ')', 'error');
             }
             return false;
         }
@@ -189,6 +204,28 @@ class AI_Product_Image_Task_Manager {
             }
             return false;
         }
+        // --- Определяем иконку по сезону ---
+        $icon_file = '';
+        $icons_dir = trailingslashit($upload_dir['basedir']) . 'ai_image/icons/';
+        if ($season_lc === 'зимняя') {
+            $icon_file = 'icon_winter';
+        } elseif ($season_lc === 'летняя') {
+            $icon_file = 'icon_summer';
+        } else {
+            $icon_file = 'icon_allseason';
+        }
+        $icon_path = '';
+        foreach (['png','jpg','jpeg','webp'] as $ext) {
+            $try = $icons_dir . $icon_file . '.' . $ext;
+            if (file_exists($try)) {
+                $icon_path = 'icons/' . $icon_file . '.' . $ext;
+                //error_log('[AI_IMAGE_TASK] icon_path выбран: ' . $icon_path . ' (файл найден)');
+                break;
+            }
+        }
+        if (!$icon_path) {
+            error_log('[AI_IMAGE_TASK] icon_path не найден для сезона: ' . $season_lc);
+        }
         $task = [
             'task_id' => $task_id,
             'product_id' => $product_id, // <--- добавлено поле product_id
@@ -221,6 +258,7 @@ class AI_Product_Image_Task_Manager {
                 'runwayml_api_key' => get_option('ai_image_runwayml_api_key', ''),
                 'runwayml_prompt' => get_option('ai_image_runwayml_prompt', ''),
                 'debug_logging' => $debug_logging ? true : false,
+                'icon_path' => $icon_path,
             ], $settings)
         ];
         // Копируем оригинал в originals/
@@ -402,5 +440,19 @@ class AI_Product_Image_Task_Manager {
             }
         }
         return false;
+    }
+
+    /**
+     * Логирование отсутствующих оригиналов
+     */
+    private function log_missing_original($sku, $product_id) {
+        $upload_dir = wp_upload_dir();
+        $logs_dir = trailingslashit($upload_dir['basedir']) . 'ai_image/logs/';
+        if (!is_dir($logs_dir)) {
+            wp_mkdir_p($logs_dir);
+        }
+        $log_file = $logs_dir . 'missing_originals.log';
+        $line = date('Y-m-d H:i:s') . " | product_id: $product_id | sku: $sku\n";
+        file_put_contents($log_file, $line, FILE_APPEND);
     }
 } 

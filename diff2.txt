@@ -1,0 +1,983 @@
+1:import os
+2:import json
+3:from loguru import logger
+4:from pathlib import Path
+5:import yaml
+6:from jsonschema import validate, ValidationError
+7:# from rembg import remove  # Удаляем импорт локального rembg
+8:from PIL import Image, ImageDraw, ImageFont
+9:import cv2
+10:import numpy as np
+11:import sys
+12:import argparse
+13:import subprocess
+14:import shutil
+15:import uuid
+16:import io
+17:import requests
+18:import importlib.util
+19:import base64
+20:import time  # Добавлен импорт для паузы между задачами
+22:# --- Явная проверка Python 3.9 и активация venv39 (только для Windows) ---
+23:if not (sys.version_info.major == 3 and sys.version_info.minor == 9):
+24:    venv_python = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'venv39', 'Scripts', 'python.exe')
+25:    if os.path.exists(venv_python):
+26:        print(f"[PYTHON ENV CHECK] Перезапуск в окружении Python 3.9: {venv_python}")
+27:        os.execv(venv_python, [venv_python] + sys.argv)
+28:    else:
+29:        print("[PYTHON ENV CHECK] Требуется Python 3.9 и окружение venv39! Завершение работы.")
+30:        sys.exit(1)
+32:print('=== ai_image_processor.py STARTED ===')
+33:print('sys.argv:', sys.argv)
+35:# --- Парсинг аргументов ---
+36:parser = argparse.ArgumentParser()
+37:parser.add_argument('--config', type=str, default='config.yaml', help='Путь к config.yaml')
+38:parser.add_argument('--task', type=str, help='Путь к задаче (JSON)')
+39:parser.add_argument('--debug', action='store_true', help='Включить подробное логирование и сохранение промежуточных изображений')
+40:args, unknown = parser.parse_known_args()
+42:CONFIG_PATH = Path(args.config)
+43:if CONFIG_PATH.exists():
+44:    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+45:        config = yaml.safe_load(f)
+46:else:
+47:    raise RuntimeError(f'config.yaml not found: {CONFIG_PATH}')
+49:PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+50:TASKS_DIR = (PROJECT_ROOT / config['tasks_dir']).resolve()
+51:RESULTS_DIR = (PROJECT_ROOT / config['results_dir']).resolve()
+52:LOGS_DIR = (PROJECT_ROOT / config['logs_dir']).resolve()
+53:ORIGINALS_DIR = (PROJECT_ROOT / config['originals_dir']).resolve()
+54:PROCESSED_DIR = (PROJECT_ROOT / config['processed_dir']).resolve()
+55:TEMPLATES_DIR = (PROJECT_ROOT / config['templates_dir']).resolve()
+56:# LOGOS_DIR = (PROJECT_ROOT / config['logos_dir']).resolve()  # удалено как неиспользуемое
+57:BATCH_SIZE = config.get('batch_size', 10)
+59:# --- Новый параметр: интервал между задачами (сек) ---
+60:TASK_INTERVAL_SEC = config.get('task_interval_sec', 10)
+61:MIN_TASK_INTERVAL_SEC = TASK_INTERVAL_SEC
+62:MAX_TASK_INTERVAL_SEC = config.get('max_task_interval_sec', 120)
+63:SUCCESS_DECREASE_STEP = config.get('success_decrease_step', 2)
+64:SUCCESS_DECREASE_AFTER = config.get('success_decrease_after', 3)
+66:# --- Динамическая пауза ---
+67:current_pause = TASK_INTERVAL_SEC
+68:success_counter = 0
+70:LOGS_DIR.mkdir(parents=True, exist_ok=True)
+71:PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+72:# Настройка ротации логов: rotation='10 MB', retention=5, level=config.get('log_level', 'INFO')
+73:logger.add(str(LOGS_DIR / 'processor.log'), rotation='10 MB', retention=5, level=config.get('log_level', 'INFO'))
+75:# Пример схемы задачи
+76:TASK_SCHEMA = {
+77:    "type": "object",
+78:    "properties": {
+79:        "task_id": {"type": "string"},
+80:        "product_data": {"type": "object"},
+81:        "original_image": {"type": "string"},
+82:        "template": {"type": "string"},
+83:        "output_filename": {"type": "string"},
+84:    },
+85:    "required": ["task_id", "product_data", "original_image", "template", "output_filename"]
+88:# --- КОНСТАНТЫ ДЛЯ КОМПОНОВКИ ---
+89:COEFF = {
+90:    'brand_font': 0.103,
+91:    'brand_y': 0.058,
+92:    'model_font': 0.052,
+93:    'model_y': 0.156,
+94:    'specs_main_font': 0.083,
+95:    'specs_rim_font': 0.083,
+96:    'specs_x': 0.5,
+97:    'specs_y': 0.213,
+98:    'specs_main_w': 0.5596,
+99:    'specs_main_h': 0.0859,
+100:	'main_text_x': 0.0505,
+101:    'main_text_y': 0.279,
+102:    'index_box_w': 0.1951,
+103:    'index_box_h': 0.1295,
+104:    'season_font': 0.0419,
+105:    'season_x': 0.0639,
+106:    'season_y': 0.7966,
+107:    'season_y2': 0.8329,
+108:    'tire_w': 0.6612,
+109:    'tire_h': 0.6392,
+110:    'tire_x': 0.3129,
+111:    'tire_y': 0.3087,
+112:    'icon_w': 0.0871,
+113:    'icon_h': 0.0726,
+114:    'icon_x': 0.2661,
+115:    'icon_y': 0.79,
+118:# --- Альтернативный режим восстановления шины под логотипом ---
+119:ALT_TIRE_INPAINT = True  # Включить альтернативный inpaint только по шине
+121:def validate_task_json(task):
+122:    try:
+123:        validate(instance=task, schema=TASK_SCHEMA)
+124:        return True, None
+125:    except ValidationError as e:
+126:        return False, str(e)
+128:# ---------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ----------
+129:def get_font(size, font_path):
+130:    """
+131:    Получить объект ImageFont. Если font_path невалиден — fallback на системный шрифт или дефолтный.
+132:    :param size: размер шрифта
+133:    :param font_path: путь к ttf-файлу
+134:    :return: ImageFont
+135:    """
+136:    from PIL import ImageFont
+137:    import os
+138:    import sys
+139:    if font_path and os.path.exists(font_path):
+140:        try:
+141:            if args.debug:
+142:                logger.debug(f"Используется кастомный шрифт: {font_path}")
+143:            return ImageFont.truetype(font_path, int(size))
+144:        except Exception as e:
+145:            logger.warning(f"Ошибка загрузки кастомного шрифта '{font_path}': {e}. Пробую системный fallback.")
+146:    try:
+147:        if sys.platform.startswith('win'):
+148:            if args.debug:
+149:                logger.debug("Используется системный шрифт: arial.ttf (Windows)")
+150:            return ImageFont.truetype("arial.ttf", int(size))
+151:        else:
+152:            if args.debug:
+153:                logger.debug("Используется системный шрифт: DejaVuSans.ttf (Linux/Mac)")
+154:            return ImageFont.truetype("DejaVuSans.ttf", int(size))
+155:    except Exception as e:
+156:        logger.warning(f"Ошибка загрузки системного шрифта: {e}. Используется ImageFont.load_default().")
+157:        return ImageFont.load_default()
+159:# ---- ФУНКЦИИ РИСОВКИ ПО МАКЕТУ ----
+160:def draw_brand(draw, text, width, height, font_path_bold, WHITE, debug_logging=False):
+161:    font_size = int(width * COEFF['brand_font'])
+162:    font = get_font(font_size, font_path_bold)
+163:    x = width // 2
+164:    y = int(height * COEFF['brand_y'])
+165:    bbox = font.getbbox(text) if hasattr(font, 'getbbox') else (0, 0, *font.getmask(text).size)
+166:    block_w = bbox[2] - bbox[0]
+167:    block_h = bbox[3] - bbox[1]
+168:    if debug_logging:
+169:        print(f'draw_brand: text="{text}", x={x}, y={y}, font_size={font_size}, block_w={block_w}, block_h={block_h}')
+170:        logger.debug(f'draw_brand: text="{text}", x={x}, y={y}, font_size={font_size}, block_w={block_w}, block_h={block_h}')
+171:    draw.text((x, y), text, font=font, fill=WHITE, anchor='mt')
+173:def draw_model(draw, text, width, height, font_path_semibold, WHITE, debug_logging=False):
+174:    font_size = int(width * COEFF['model_font'])
+175:    font = get_font(font_size, font_path_semibold)
+176:    x = width // 2
+177:    y = int(height * COEFF['model_y'])
+178:    bbox = font.getbbox(text) if hasattr(font, 'getbbox') else (0, 0, *font.getmask(text).size)
+179:    block_w = bbox[2] - bbox[0]
+180:    block_h = bbox[3] - bbox[1]
+181:    if debug_logging:
+182:        print(f'draw_model: text="{text}", x={x}, y={y}, font_size={font_size}, block_w={block_w}, block_h={block_h}')
+183:        logger.debug(f'draw_model: text="{text}", x={x}, y={y}, font_size={font_size}, block_w={block_w}, block_h={block_h}')
+184:    draw.text((x, y), text, font=font, fill=WHITE, anchor='mt')
+186:def draw_specs(draw, main_text, rim_text, width, height, font_path_semibold, font_path_bold, BLACK, WHITE, debug_logging=False):
+187:    main_font = get_font(int(width * COEFF['specs_main_font']), font_path_semibold)
+188:    rim_font = get_font(int(width * COEFF['specs_rim_font']), font_path_bold)
+189:    specs_x = int(width * COEFF['specs_x'])
+190:    specs_y = int(height * COEFF['specs_y'])
+191:    main_w = int(width * COEFF['specs_main_w'])
+192:    main_h = int(height * COEFF['specs_main_h'])
+193:    main_text_x = int(main_w * COEFF['main_text_x'])
+194:    main_text_y = int(height * COEFF['main_text_y'])
+195:    bbox_main = main_font.getbbox(main_text) if hasattr(main_font, 'getbbox') else (0, 0, *main_font.getmask(main_text).size)
+196:    block_w_main = bbox_main[2] - bbox_main[0]
+197:    block_h_main = bbox_main[3] - bbox_main[1]
+198:    if debug_logging:
+199:        print(f'draw_specs: main_text="{main_text}", x={(specs_x - main_w//2) + main_text_x}, y={specs_y + main_text_y}, font_size={main_font.size}, block_w={block_w_main}, block_h={block_h_main}')
+200:        logger.debug(f'draw_specs: main_text="{main_text}", x={(specs_x - main_w//2) + main_text_x}, y={specs_y + main_text_y}, font_size={main_font.size}, block_w={block_w_main}, block_h={block_h_main}')
+201:    bbox_rim = rim_font.getbbox(rim_text) if hasattr(rim_font, 'getbbox') else (0, 0, *rim_font.getmask(rim_text).size)
+202:    block_w_rim = bbox_rim[2] - bbox_rim[0]
+203:    block_h_rim = bbox_rim[3] - bbox_rim[1]
+204:    if debug_logging:
+205:        print(f'draw_specs: rim_text="{rim_text}", font_size={rim_font.size}, block_w={block_w_rim}, block_h={block_h_rim}')
+206:        logger.debug(f'draw_specs: rim_text="{rim_text}", font_size={rim_font.size}, block_w={block_w_rim}, block_h={block_h_rim}')
+207:    # main_text: левый край прямоугольника + отступ main_text_x
+208:    draw.text(
+209:        ((specs_x - main_w//2) + main_text_x, main_text_y),
+210:        main_text, font=main_font, fill=BLACK, anchor='ls'
+211:    )
+212:    # rim_text: центр прямоугольника rim_rect по X, main_text_y по Y (как в оригинале)
+213:    rim_space = int(main_h * 0.0698)
+214:    rim_x = (specs_x - main_w//2) + int(main_w * 0.6379)
+215:    rim_x2 = (specs_x + main_w//2) - rim_space
+216:    rim_w = rim_x2 - rim_x
+217:    draw.text(
+218:        (rim_x + rim_w//2, main_text_y),
+219:        rim_text, font=rim_font, fill=WHITE, anchor='ms'
+220:    )
+222:def draw_index_box(draw, value, width, height, x, y, font_path_bold, WHITE, debug_logging=False):
+223:    box_w = int(width * COEFF['index_box_w'])
+224:    box_h = int(height * COEFF['index_box_h'])
+225:    num_font = get_font(int(width * 0.0629), font_path_bold)
+226:    cx = x + int(box_w * 0.0682)
+227:    cy = y + int(box_h * 0.0526)
+228:    bbox_val = num_font.getbbox(value) if hasattr(num_font, 'getbbox') else (0, 0, *num_font.getmask(value).size)
+229:    block_w_val = bbox_val[2] - bbox_val[0]
+230:    block_h_val = bbox_val[3] - bbox_val[1]
+231:    if debug_logging:
+232:        print(f'draw_index_box: value="{value}", x={cx}, y={cy}, font_size={num_font.size}, block_w={block_w_val}, block_h={block_h_val}')
+233:        logger.debug(f'draw_index_box: value="{value}", x={cx}, y={cy}, font_size={num_font.size}, block_w={block_w_val}, block_h={block_h_val}')
+234:    draw.text((cx, cy), value, font=num_font, fill=WHITE, anchor='lt')
+236:def draw_tire(img, tire_img, width, height):
+237:    tire_w = int(width * COEFF['tire_w'])
+238:    tire_h = int(height * COEFF['tire_h'])
+239:    x = int(width * COEFF['tire_x'])
+240:    y = int(height * COEFF['tire_y'])
+241:    # --- Новая логика вписывания с сохранением пропорций ---
+242:    orig_w, orig_h = tire_img.size
+243:    rect_w, rect_h = tire_w, tire_h
+244:    aspect_orig = orig_w / orig_h
+245:    aspect_rect = rect_w / rect_h
+246:    if aspect_orig < aspect_rect:
+247:        # Изображение более "высокое" — вписываем по высоте
+248:        new_h = rect_h
+249:        new_w = int(orig_w * (rect_h / orig_h))
+250:        offset_x = x + (rect_w - new_w) // 2
+251:        offset_y = y
+252:    else:
+253:        # Изображение более "широкое" — вписываем по ширине
+254:        new_w = rect_w
+255:        new_h = int(orig_h * (rect_w / orig_w))
+256:        offset_x = x
+257:        offset_y = y + (rect_h - new_h)
+258:    tire_resized = tire_img.resize((new_w, new_h), Image.LANCZOS)
+259:    img.paste(tire_resized, (offset_x, offset_y), tire_resized)
+261:# --- Вспомогательные функции ---
+262:def crop_to_content(img):
+263:    """
+264:    Обрезает изображение по содержимому (убирает пустые края).
+265:    Работает с RGBA изображениями, учитывая прозрачность.
+266:    """
+267:    arr = np.array(img)
+268:    
+269:    # Если изображение RGB, конвертируем в RGBA
+270:    if arr.shape[2] == 3:
+271:        arr = np.dstack([arr, np.full(arr.shape[:2], 255, dtype=np.uint8)])
+272:    
+273:    # Создаем маску непрозрачных пикселей
+274:    if arr.shape[2] == 4:
+275:        # Для RGBA: учитываем альфа-канал
+276:        mask = arr[..., 3] > 10  # Небольшой порог для учета полупрозрачности
+277:    else:
+278:        # Для RGB: считаем все пиксели непрозрачными
+279:        mask = np.ones(arr.shape[:2], dtype=bool)
+280:    
+281:    # Находим границы содержимого
+282:    coords = np.argwhere(mask)
+283:    if coords.size == 0:
+284:        logger.warning("crop_to_content: не найдено содержимое для обрезки")
+285:        return img
+286:    
+287:    y0, x0 = coords.min(axis=0)
+288:    y1, x1 = coords.max(axis=0) + 1
+289:    
+290:    # Добавляем небольшой отступ
+291:    h, w = arr.shape[:2]
+292:    x0 = max(0, x0 - 5)
+293:    y0 = max(0, y0 - 5)
+294:    x1 = min(w, x1 + 5)
+295:    y1 = min(h, y1 + 5)
+296:    
+297:    if args.debug:
+298:        print(f'crop_to_content: crop box (x0={x0}, y0={y0}, x1={x1}, y1={y1})')
+299:        logger.debug(f'crop_to_content: crop box (x0={x0}, y0={y0}, x1={x1}, y1={y1})')
+300:    
+301:    return img.crop((x0, y0, x1, y1))
+303:def resolve_font_path(font_path):
+304:    if not font_path:
+305:        return None
+306:    if font_path.startswith('uploads/'):
+307:        project_root = Path(__file__).parent.parent.resolve()
+308:        abs_path = project_root / font_path
+309:        return str(abs_path)
+310:    return font_path
+312:# --- Универсальная функция удаления логотипа с автоадаптацией ---
+313:def get_salient_mask_u2net(img):
+314:    from u2net import U2NETPredictor
+315:    import torch
+316:    from pathlib import Path
+317:    weights_path = (Path(__file__).parent / 'u2net.pth').resolve()
+318:    predictor = U2NETPredictor(weights_path=weights_path)
+319:    mask = predictor.predict(img.convert('RGB'))
+320:    return Image.fromarray(mask).convert('L')
+322:def get_auto_color_masks(img, roi_height_ratio=0.35, min_bright=180, color_quant=16, top_colors=3):
+323:    """
+324:    Автоматически находит самые яркие и часто встречающиеся цвета в нижней части изображения
+325:    (без sklearn, только numpy!). Маски по цвету + яркость.
+326:    color_quant — степень округления цветов (16: цвета округляются к ближайшему кратному 16)
+327:    """
+328:    img_np = np.array(img.convert('RGB'))
+329:    h, w, _ = img_np.shape
+330:    roi = img_np[int(h*(1-roi_height_ratio)):, :, :]
+332:    # Маска по яркости (белый, светлый логотип)
+333:    gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
+334:    _, mask_bright = cv2.threshold(gray, min_bright, 255, cv2.THRESH_BINARY)
+336:    # Грубое квантование цвета (убираем шум)
+337:    roi_quant = (roi // color_quant) * color_quant
+338:    roi_flat = roi_quant.reshape(-1, 3)
+339:    # Получаем уникальные цвета и их частоты
+340:    uniq, counts = np.unique(roi_flat, axis=0, return_counts=True)
+341:    idxs = np.argsort(-counts)[:top_colors]
+342:    dominant_colors = uniq[idxs]
+344:    # Строим маски для каждого доминирующего цвета
+345:    mask_colors = np.zeros_like(mask_bright)
+346:    for color in dominant_colors:
+347:        lower = np.clip(color - color_quant, 0, 255)
+348:        upper = np.clip(color + color_quant, 0, 255)
+349:        mask = cv2.inRange(roi, lower, upper)
+350:        mask_colors = cv2.bitwise_or(mask_colors, mask)
+352:    # Маска логотипа: яркие области + цветовые
+353:    mask_logo = cv2.bitwise_or(mask_bright, mask_colors)
+354:    # Маску возвращаем в размер всего изображения
+355:    full_mask = np.zeros((h, w), dtype=np.uint8)
+356:    full_mask[int(h*(1-roi_height_ratio)):, :] = mask_logo
+357:    return full_mask
+359:def remove_logo_opencv(img, mask_salient, mask_auto, debug_path_prefix=None):
+360:    import cv2
+361:    import numpy as np
+362:    img_np = np.array(img)
+363:    # Если mask_salient полностью нулевой, используем только mask_auto
+364:    if np.count_nonzero(mask_salient) == 0:
+365:        inpaint_mask = (mask_auto > 128).astype(np.uint8) * 255
+366:        img_inpaint = cv2.inpaint(img_np[..., :3], inpaint_mask, 7, cv2.INPAINT_TELEA)
+367:        img_result = np.dstack([img_inpaint, img_np[..., 3]])
+368:        if debug_path_prefix:
+369:            mask_img = Image.fromarray(inpaint_mask)
+370:            if f'{debug_path_prefix}_mask.png'.lower().endswith(('.jpg', '.jpeg')) and mask_img.mode == 'RGBA':
+371:                mask_img = mask_img.convert('RGB')
+372:            mask_img.save(f'{debug_path_prefix}_mask.png')
+373:            inpaint_img = Image.fromarray(img_result, mode='RGBA')
+374:            if f'{debug_path_prefix}_inpaint.png'.lower().endswith(('.jpg', '.jpeg')) and inpaint_img.mode == 'RGBA':
+375:                inpaint_img = inpaint_img.convert('RGB')
+376:            inpaint_img.save(f'{debug_path_prefix}_inpaint.png')
+377:        return Image.fromarray(img_result, mode='RGBA')
+378:    # --- стандартная логика для остальных случаев ---
+379:    if ALT_TIRE_INPAINT:
+380:        # 1. Маска шины (salient)
+381:        mask_tire = (mask_salient > 128)
+382:        # 2. Маска логотипа (auto)
+383:        mask_logo = (mask_auto > 128)
+384:        # 3. Маска "шина без логотипа"
+385:        mask_tire_wo_logo = mask_tire & (~mask_logo)
+386:        # 4. Вырезать только видимую часть шины
+387:        tire_visible = np.zeros_like(img_np)
+388:        tire_visible[mask_tire_wo_logo] = img_np[mask_tire_wo_logo]
+389:        # 5. Inpaint только по тем пикселям, где был логотип (внутри шины)
+390:        inpaint_mask = (mask_tire & mask_logo).astype(np.uint8) * 255
+391:        tire_inpainted = cv2.inpaint(tire_visible[..., :3], inpaint_mask, 7, cv2.INPAINT_TELEA)
+392:        # 6. Собрать итоговую шину
+393:        result = img_np.copy()
+394:        result[mask_tire] = np.dstack([tire_inpainted, img_np[..., 3]])[mask_tire]
+395:        if debug_path_prefix:
+396:            mask_img = Image.fromarray(inpaint_mask)
+397:            if f'{debug_path_prefix}_mask.png'.lower().endswith(('.jpg', '.jpeg')) and mask_img.mode == 'RGBA':
+398:                mask_img = mask_img.convert('RGB')
+399:            mask_img.save(f'{debug_path_prefix}_mask.png')
+400:            inpaint_img = Image.fromarray(np.dstack([tire_inpainted, img_np[..., 3]]), mode='RGBA')
+401:            if f'{debug_path_prefix}_inpaint.png'.lower().endswith(('.jpg', '.jpeg')) and inpaint_img.mode == 'RGBA':
+402:                inpaint_img = inpaint_img.convert('RGB')
+403:            inpaint_img.save(f'{debug_path_prefix}_inpaint.png')
+404:        return Image.fromarray(result, mode='RGBA')
+405:    else:
+406:        # Находим все контуры на салентной маске (чтобы оставить только основной объект - шину)
+407:        contours, _ = cv2.findContours((mask_salient > 128).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+408:        if contours:
+409:            main_idx = int(np.argmax([cv2.contourArea(c) for c in contours]))
+410:            main_mask = np.zeros_like(mask_salient)
+411:            cv2.drawContours(main_mask, [contours[main_idx]], -1, 255, -1)
+412:            extra_mask = ((mask_salient > 128) & (main_mask == 0)).astype(np.uint8) * 255
+413:        else:
+414:            extra_mask = np.zeros_like(mask_salient)
+415:        final_mask = cv2.bitwise_or(mask_auto, extra_mask)
+416:        kernel = np.ones((9,9), np.uint8)
+417:        final_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel)
+418:        final_mask = cv2.dilate(final_mask, kernel, iterations=1)
+419:        img_inpaint = cv2.inpaint(img_np[..., :3], final_mask, 7, cv2.INPAINT_TELEA)
+420:        img_result = np.dstack([img_inpaint, img_np[..., 3]])
+421:        if debug_path_prefix:
+422:            mask_img = Image.fromarray(final_mask)
+423:            if f'{debug_path_prefix}_mask.png'.lower().endswith(('.jpg', '.jpeg')) and mask_img.mode == 'RGBA':
+424:                mask_img = mask_img.convert('RGB')
+425:            mask_img.save(f'{debug_path_prefix}_mask.png')
+426:            inpaint_img = Image.fromarray(img_result, mode='RGBA')
+427:            if f'{debug_path_prefix}_inpaint.png'.lower().endswith(('.jpg', '.jpeg')) and inpaint_img.mode == 'RGBA':
+428:                inpaint_img = inpaint_img.convert('RGB')
+429:            inpaint_img.save(f'{debug_path_prefix}_inpaint.png')
+430:        return Image.fromarray(img_result, mode='RGBA')
+432:def remove_logo_lama(img, mask_salient, mask_auto, debug_path_prefix=None):
+433:    """
+434:    Удаление логотипа с помощью lama-cleaner через HTTP API (серверный режим).
+435:    """
+436:    import numpy as np
+437:    from PIL import Image
+438:    import os
+439:    import io
+440:    import requests
+441:    import traceback
+442:    # Генерируем итоговую маску (аналогично OpenCV)
+443:    final_mask = np.bitwise_or(mask_salient, mask_auto)
+444:    # Логируем статистику маски
+445:    nonzero = np.count_nonzero(final_mask)
+446:    logger.debug(f'LAMA_MASK: shape={final_mask.shape}, nonzero={nonzero}')
+447:    if nonzero == 0:
+448:        logger.error('LAMA_MASK: Маска пуста, inpaint невозможен!')
+449:        raise RuntimeError('Маска для lama-cleaner пуста, inpaint невозможен.')
+450:    # Сохраняем input и mask во временные in-memory файлы
+451:    img_bytes = io.BytesIO()
+452:    img.save(img_bytes, format='PNG')
+453:    img_bytes.seek(0)
+454:    mask_img = Image.fromarray(final_mask)
+455:    mask_bytes = io.BytesIO()
+456:    mask_img.save(mask_bytes, format='PNG')
+457:    mask_bytes.seek(0)
+458:    # Сохраняем для отладки
+459:    if debug_path_prefix:
+460:        img.save(f'{debug_path_prefix}_lama_input.png')
+461:        mask_img.save(f'{debug_path_prefix}_lama_mask.png')
+462:    # Дамп multipart-запроса
+463:    logger.debug(f'LAMA_API_DUMP: image size={img.size}, mask size={mask_img.size}, img_bytes={len(img_bytes.getvalue())}, mask_bytes={len(mask_bytes.getvalue())}')
+464:    logger.debug(f'LAMA_API_DUMP: img_bytes[:16]={img_bytes.getvalue()[:16]}, mask_bytes[:16]={mask_bytes.getvalue()[:16]}')
+465:    # Настройки lama-cleaner API
+466:    lama_url = os.environ.get('LAMA_API_URL', 'http://127.0.0.1:8080/inpaint')
+467:    files = {
+468:        'image': ('input.png', img_bytes, 'image/png'),
+469:        'mask': ('mask.png', mask_bytes, 'image/png'),
+470:    }
+471:    data = {
+472:        'model': 'lama',
+473:        'device': 'cpu',
+474:        'prompt': '',
+475:        'steps': 1,
+476:        'sampler': 'ddim',
+477:        'hd_strategy': 'Original',
+478:        'hd_strategy_crop_margin': 32,
+479:        'hd_strategy_crop_trigger_size': 1280,
+480:        'hd_strategy_resize_limit': 2048,
+481:        'use_croper': False,
+482:        'croper_x': 0,
+483:        'croper_y': 0,
+484:        'croper_height': 0,
+485:        'croper_width': 0,
+486:        'return_mask': False,
+487:        'return_origin': False,
+488:    }
+489:    try:
+490:        response = requests.post(lama_url, files=files, data=data, timeout=120)
+491:        response.raise_for_status()
+492:        result_img = Image.open(io.BytesIO(response.content)).convert('RGBA')
+493:        if debug_path_prefix:
+494:            inpaint_img = result_img
+495:            inpaint_img.save(f'{debug_path_prefix}_lama_inpaint.png')
+496:        return result_img
+497:    except Exception as e:
+498:        tb = traceback.format_exc()
+499:        logger.error(f'# LAMA_API_PATCH: Ошибка lama-cleaner API: {e}\n{tb}')
+500:        raise RuntimeError(f'lama-cleaner API error: {e}\n{tb}')
+502:def remove_logo_from_object(img, mask_path=None, logo_removal_method='runwayml', debug_path_prefix=None, params=None):
+503:    if img.mode != 'RGBA':
+504:        img = img.convert('RGBA')
+505:    if logo_removal_method == 'runwayml':
+506:        prompt = None
+507:        if params and params.get('runwayml_prompt'):
+508:            prompt = params.get('runwayml_prompt')
+509:        else:
+510:            prompt = 'Remove any object overlapping the main subject (if present), including logos and watermarks. After removal, realistically restore the main image. The main subject is a car tire on a wheel, standing vertically. Do not change, alter, distort, or remove any markings, symbols, texts, numbers, or labels present on the tire sidewalls, the tire itself, or the wheel. Improve the image quality. Output: a single car tire on a wheel, standing vertically.'
+511:        api_key = str(params.get('runwayml_api_key')) if params and params.get('runwayml_api_key') is not None else None
+512:        logger.info(f"Удаление логотипа и фона методом: runwayml, prompt={prompt}")
+513:        logger.info(f"API-ключ из params: {'передан' if api_key else 'НЕ передан'}")
+514:        if not api_key:
+515:            logger.error("API-ключ RunwayML не передан!")
+516:            logger.error("Проверьте: 1) переменную окружения RUNWAYML_API_KEY, 2) передачу ключа в params задачи")
+517:            raise RuntimeError("API-ключ RunwayML не передан!")
+518:        return remove_logo_runwayml(img, prompt, api_key, debug_path_prefix)
+519:    # --- Для активации других методов раскомментируйте и доработайте код ниже ---
+520:    # elif logo_removal_method == 'lama':
+521:    #     ...
+522:    # else:
+523:    #     ...
+524:    # ------------------------------------------------------
+526:def remove_logo_runwayml(img, prompt, api_key, debug_path_prefix=None):
+527:    """
+528:    Удаление логотипа и восстановление объекта через runwayml.com API.
+529:    Использует официальный SDK RunwayML.
+530:    
+531:    Изображение автоматически ресайзится до максимальной стороны 720px
+532:    с сохранением пропорций. Соотношение сторон передается точно
+533:    как f"{width}:{height}".
+534:    
+535:    Документация: https://docs.dev.runwayml.com/
+536:    """
+537:    import io
+538:    import base64
+539:    from PIL import Image
+540:    
+541:    try:
+542:        from runwayml import RunwayML, TaskFailedError
+543:    except ImportError:
+544:        logger.error("[RunwayML] SDK RunwayML не установлен. Установите: pip install runwayml")
+545:        raise RuntimeError("SDK RunwayML не установлен. Установите: pip install runwayml")
+546:    
+547:    api_key = str(api_key) if api_key is not None else ''
+548:    masked_key = (api_key[:5] + '...' + str(len(api_key))) if api_key else '(none)'
+549:    logger.info(f"[RunwayML] Используется API-ключ: {masked_key}")
+550:    
+551:    if not api_key:
+552:        logger.error("API-ключ RunwayML не передан или пуст!")
+553:        raise RuntimeError("API-ключ RunwayML не передан или пуст!")
+554:    
+555:    logger.info(f"[RunwayML] Старт отправки изображения на runwayml.com для удаления логотипа. Prompt: {prompt}")
+556:    
+557:    try:
+558:        # Инициализируем клиент RunwayML
+559:        client = RunwayML(api_key=api_key)
+560:        
+561:        # Ресайзим изображение для RunwayML с сохранением пропорций
+562:        # Цель: получить изображение, которое поместится в квадрат 720x720
+563:        w, h = img.size
+564:        target_size = 720
+565:        
+566:        if w > h and w > target_size:
+567:            # Ширина больше высоты и больше 720 - уменьшаем ширину до 720, высота в пропорции
+568:            new_w = target_size
+569:            new_h = int(h * target_size / w)
+570:        elif w < h and h > target_size:
+571:            # Высота больше ширины и больше 720 - уменьшаем высоту до 720, ширина в пропорции
+572:            new_h = target_size
+573:            new_w = int(w * target_size / h)
+574:        elif w == h and w > target_size:
+575:            # Квадратное изображение - обе стороны до 720, если они больше 720
+576:            new_w = target_size
+577:            new_h = target_size
+578:        else:
+579:            # Изображение уже меньше или равно 720px - оставляем как есть
+580:            new_w = w
+581:            new_h = h
+582:        
+583:        img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+584:        logger.info(f"[RunwayML] Изображение ресайзено: {w}x{h} -> {new_w}x{new_h}")
+585:        
+586:        # Конвертируем ресайзенное изображение в base64 data URI
+587:        img_bytes = io.BytesIO()
+588:        img_resized.save(img_bytes, format='PNG')
+589:        img_bytes.seek(0)
+590:        base64_image = base64.b64encode(img_bytes.getvalue()).decode("utf-8")
+591:        data_uri = f"data:image/png;base64,{base64_image}"
+592:        
+593:        # Используем фиксированное соотношение 720:720 для RunwayML
+594:        ratio = "720:720"
+595:        logger.info(f"[RunwayML] Используется соотношение: {ratio}")
+596:        
+597:        task = client.text_to_image.create(
+598:            model='gen4_image',
+599:            ratio=ratio,
+600:            prompt_text=prompt,
+601:            reference_images=[
+602:                {
+603:                    'uri': data_uri,
+604:                    'tag': 'original',
+605:                },
+606:            ],
+607:        ).wait_for_task_output()
+608:        
+609:        logger.info("[RunwayML] Задача выполнена успешно")
+610:        
+611:        # Получаем результат (URL изображения)
+612:        if task.output and len(task.output) > 0:
+613:            image_url = task.output[0]
+614:            logger.info(f"[RunwayML] Получен URL результата: {image_url}")
+615:            
+616:            # Скачиваем изображение
+617:            import requests
+618:            response = requests.get(image_url, timeout=120)
+619:            response.raise_for_status()
+620:            
+621:            # Конвертируем в PIL Image
+622:            result_img = Image.open(io.BytesIO(response.content)).convert('RGBA')
+623:            
+624:            if debug_path_prefix:
+625:                result_img.save(f'{debug_path_prefix}_runwayml_result.png')
+626:            
+627:            logger.info("[RunwayML] Успешно получено изображение без логотипа.")
+628:            return result_img
+629:        else:
+630:            raise RuntimeError("RunwayML не вернул результат изображения")
+631:            
+632:    except TaskFailedError as e:
+633:        logger.error(f"[RunwayML] Задача не выполнена: {e}")
+634:        logger.error(f"[RunwayML] Детали ошибки: {e.task_details}")
+635:        raise RuntimeError(f"RunwayML task failed: {e}")
+636:    except Exception as e:
+637:        logger.error(f"[RunwayML] Ошибка при обращении к runwayml.com: {e}")
+638:        # Добавляем дополнительную диагностику согласно документации
+639:        if hasattr(e, 'response') and hasattr(e.response, 'text'):
+640:            logger.error(f"[RunwayML] Тело ответа: {e.response.text}")
+641:        raise RuntimeError(f"RunwayML API error: {e}")
+643:def mask_api_key(key: str) -> str:
+644:    if not key or len(key) < 8:
+645:        return '****'
+646:    return '*' * (len(key) - 4) + key[-4:]
+648:# --- настройка логирования с ротацией и отдельным errors.log ---
+649:def setup_logging(debug_mode=False):
+650:    from loguru import logger as loguru_logger
+651:    logger.remove()
+652:    log_level = 'DEBUG' if debug_mode else 'INFO'
+653:    loguru_logger.add(str(LOGS_DIR / 'processor.log'), rotation='1 week', retention='4 weeks', level=log_level)
+654:    loguru_logger.add(str(LOGS_DIR / 'errors.log'), rotation='1 week', retention='4 weeks', level='ERROR')
+655:    return loguru_logger
+657:# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+658:# Добавляем функцию для удалённого rembg
+660:def remove_bg_rembg_remote(img: Image.Image, rembg_url: str, username: str = None, password: str = None) -> Image.Image:
+661:    import io
+662:    import requests
+663:    from PIL import Image
+664:    import logging
+665:    if img is None:
+666:        logger.error('[rembg] Передано пустое изображение (None)')
+667:        raise ValueError('Передано пустое изображение (None)')
+668:    if not isinstance(img, Image.Image):
+669:        logger.error(f'[rembg] Передан не объект PIL.Image.Image, а {type(img)}')
+670:        raise TypeError(f'Ожидался PIL.Image.Image, а получено: {type(img)}')
+671:    buf = io.BytesIO()
+672:    img.save(buf, format='PNG')
+673:    buf.seek(0)
+674:    logger.info(f'[rembg] Размер изображения для отправки: {buf.getbuffer().nbytes} байт, mode={img.mode}, size={img.size}')
+675:    # Временно сохраняем для отладки
+676:    try:
+677:        img.save('debug_rembg_input.png')
+678:    except Exception as e:
+679:        logger.warning(f'[rembg] Не удалось сохранить debug_rembg_input.png: {e}')
+680:    auth = (username, password) if username and password else None
+681:    try:
+682:        response = requests.post(
+683:            f"{rembg_url}/api/remove",
+684:            files={'file': ('image.png', buf, 'image/png')},
+685:            auth=auth,
+686:            timeout=120
+687:        )
+688:        logger.info(f'[rembg] Ответ rembg: {response.status_code}, длина: {len(response.content)} байт')
+689:        response.raise_for_status()
+690:        result_img = Image.open(io.BytesIO(response.content)).convert('RGBA')
+691:        # Временно сохраняем результат для отладки
+692:        try:
+693:            result_img.save('debug_rembg_output.png')
+694:        except Exception as e:
+695:            logger.warning(f'[rembg] Не удалось сохранить debug_rembg_output.png: {e}')
+696:        return result_img
+697:    except Exception as e:
+698:        logger.error(f'[rembg] Ошибка при обращении к rembg: {e}')
+699:        raise
+701:# --- Основная функция обработки ---
+702:def process_image(task):
+703:    """
+704:    Основная функция обработки задачи: валидирует, проверяет файлы, компилирует изображение, логирует этапы.
+705:    Новый порядок: 1) удаление логотипа, 2) удаление фона (rembg), 3) crop, 4) композит.
+706:    Внедрён суперсэмплинг и постобработка для повышения качества итогового изображения.
+707:    """
+708:    try:
+709:        params = task.get('params', {})
+710:        def get_param(key, default=None):
+711:            return params.get(key) or config.get(key) or default
+712:        debug_logging = params.get('debug_logging', False)
+713:        width = int(get_param('width', 620))
+714:        height = int(get_param('height', 826))
+715:        logo_removal_method = get_param('logo_removal_method', 'opencv')
+716:        logger.info(f"[PROCESS] Запуск обработки изображения. Метод удаления логотипа: {logo_removal_method}")
+717:        # Пути к файлам
+718:        orig_path = ORIGINALS_DIR / Path(str(task['original_image'])).name
+719:        background_path = TEMPLATES_DIR / Path(str(task['template'])).name
+720:        output_path = PROCESSED_DIR / Path(str(task['output_filename'])).name
+721:        FONT_PATH_BOLD = resolve_font_path(get_param('font_bold', 'Inter-Bold.ttf'))
+722:        FONT_PATH_SEMIBOLD = resolve_font_path(get_param('font_semibold', 'Inter-SemiBold.ttf'))
+723:        FONT_PATH_REGULAR = resolve_font_path(get_param('font_regular', 'Inter-Regular.ttf'))
+724:        # Проверка существования файлов
+725:        for p, label in [
+726:            (orig_path, 'оригинал'),
+727:            (background_path, 'шаблон'),
+728:            (FONT_PATH_BOLD, 'шрифт bold'),
+729:            (FONT_PATH_SEMIBOLD, 'шрифт semibold'),
+730:            (FONT_PATH_REGULAR, 'шрифт regular')
+731:        ]:
+732:            if p and not os.path.exists(p):
+733:                logger.error(f"Файл {label} не найден: {p}")
+734:                return None, None
+735:        # Цвета
+736:        WHITE = get_param('color_white', '#FFFFFF')
+737:        BLACK = get_param('color_black', '#222222')
+738:        # Данные товара
+739:        pd = task['product_data']
+740:        BRAND = str(pd.get('brand', ''))
+741:        MODEL = str(pd.get('model', ''))
+742:        WIDTH_PROFILE = str(pd.get('width', ''))
+743:        HEIGHT_PROFILE = str(pd.get('height', ''))
+744:        RIM = str(pd.get('diameter', ''))
+745:        LOAD_IDX = str(pd.get('load_index', ''))
+746:        SPEED_IDX = str(pd.get('speed_index', ''))
+747:        sku = pd.get('sku')
+748:        norm_sku = pd.get('norm_sku') if 'norm_sku' in pd else None
+749:        if not sku:
+750:            logger.error('[PROCESS] В задаче отсутствует sku, обработка невозможна!')
+751:            return None, None
+752:        if not norm_sku:
+753:            # Если norm_sku не передан, нормализуем sku вручную
+754:            norm_sku = ''.join(c.lower() if c.isalnum() or c in ['-', '_'] else '' for c in sku)
+756:        # === SUPER SAMPLING/POSTPROCESSING ===
+757:        SUPER_SAMPLING_FACTOR = 3  # Можно увеличить до 3 для очень высоких требований
+758:        width_ss = width * SUPER_SAMPLING_FACTOR
+759:        height_ss = height * SUPER_SAMPLING_FACTOR
+760:        # === SUPER SAMPLING/POSTPROCESSING ===
+762:        # 1. Загружаем и подгоняем фон по размеру (Суперсэмплинг)
+763:        background = Image.open(background_path).convert('RGBA').resize((width_ss, height_ss), Image.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
+764:        img = background.copy()
+765:        draw = ImageDraw.Draw(img)
+767:        # 2. Открываем оригинал
+768:        with Image.open(orig_path) as orig_img:
+769:            orig_img = orig_img.convert('RGBA')
+770:            logger.info("[PROCESS] Удаление логотипа...")
+771:            tire_img = remove_logo_from_object(
+772:                orig_img,
+773:                task.get('logo_mask'),
+774:                logo_removal_method=logo_removal_method,
+775:                debug_path_prefix=(str(output_path).replace('.', '_debug1') if debug_logging else None),
+776:                params=params
+777:            )
+778:            # --- Сохраняем gallery-версию runwayml-изображения (до rembg/crop) ---
+779:            gallery_filename = f'product_{norm_sku}_ai-gallery.jpg'
+780:            gallery_output_path = PROCESSED_DIR / gallery_filename
+781:            tire_img_to_save = tire_img
+782:            # Сохраняем gallery-версию только в JPG
+783:            if tire_img_to_save.mode in ('RGBA', 'LA'):
+784:                background = Image.new('RGB', tire_img_to_save.size, (255, 255, 255))
+785:                background.paste(tire_img_to_save, mask=tire_img_to_save.split()[-1])
+786:                tire_img_to_save = background
+787:            else:
+788:                tire_img_to_save = tire_img_to_save.convert('RGB')
+789:            gallery_output_path.parent.mkdir(parents=True, exist_ok=True)
+790:            tire_img_to_save.save(gallery_output_path, format='JPEG', quality=100, subsampling=0)
+791:            logger.info(f'[SAVE] Gallery-версия runwayml сохранена: {gallery_output_path}')
+792:            if debug_logging:
+793:                debug_path = str(gallery_output_path).replace('.', '_debug_runwayml.')
+794:                img_to_save = tire_img
+795:                if debug_path.lower().endswith((".jpg", ".jpeg")) and tire_img.mode == 'RGBA':
+796:                    img_to_save = tire_img.convert('RGB')
+797:                img_to_save.save(debug_path)
+798:            if debug_logging:
+799:                debug_path = str(output_path).replace('.', '_debug2_nologo.')
+800:                img_to_save = tire_img
+801:                if debug_path.lower().endswith((".jpg", ".jpeg")) and tire_img.mode == 'RGBA':
+802:                    img_to_save = tire_img.convert('RGB')
+803:                img_to_save.save(debug_path)
+804:            # --- Новый вызов удалённого rembg ---
+805:            rembg_url = get_param('rembg_url')
+806:            rembg_user = get_param('rembg_user')
+807:            rembg_pass = get_param('rembg_pass')
+808:            if rembg_url:
+809:                logger.info(f"[PROCESS] Удаление фона через удалённый rembg: {rembg_url}")
+810:                try:
+811:                    tire_img_nobg = remove_bg_rembg_remote(tire_img, rembg_url, rembg_user, rembg_pass)
+812:                except Exception as e:
+813:                    logger.error(f"Ошибка при удалении фона через rembg: {e}")
+814:                    return None, None
+815:            if tire_img_nobg.mode != 'RGBA':
+816:                tire_img_nobg = tire_img_nobg.convert('RGBA')
+817:            if debug_logging:
+818:                debug_path = str(output_path).replace('.', '_debug3_nobg.')
+819:                img_to_save = tire_img_nobg
+820:                    if debug_path.lower().endswith((".jpg", ".jpeg")) and tire_img_nobg.mode == 'RGBA':
+821:                    img_to_save = tire_img_nobg.convert('RGB')
+822:                img_to_save.save(debug_path)
+823:            else:
+824:                logger.error("rembg_url не задан в config.yaml или params задачи!")
+825:                return None, None
+826:            tire_img_crop = crop_to_content(tire_img_nobg)
+827:            if debug_logging:
+828:                debug_path = str(output_path).replace('.', '_debug4_crop.')
+829:                img_to_save = tire_img_crop
+830:                if debug_path.lower().endswith((".jpg", ".jpeg")) and tire_img_crop.mode == 'RGBA':
+831:                    img_to_save = tire_img_crop.convert('RGB')
+832:                img_to_save.save(debug_path)
+834:        # 6. Отрисовываем все элементы (Суперсэмплинг: подаем увеличенные размеры и шрифты)
+835:        # draw_tire(img, tire_img_crop, width, height)
+836:        draw_tire(img, tire_img_crop, width_ss, height_ss)  # === SUPER SAMPLING/POSTPROCESSING ===
+838:        # draw_brand(draw, BRAND, width, height, FONT_PATH_BOLD, WHITE, debug_logging)
+839:        draw_brand(draw, BRAND, width_ss, height_ss, FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+841:        # draw_model(draw, MODEL, width, height, FONT_PATH_SEMIBOLD, WHITE, debug_logging)
+842:        draw_model(draw, MODEL, width_ss, height_ss, FONT_PATH_SEMIBOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+844:        # draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width, height, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, CYAN, LIGHT_BG, WHITE, debug_logging)
+845:        draw_specs(draw, f"{WIDTH_PROFILE}/{HEIGHT_PROFILE}", RIM, width_ss, height_ss, FONT_PATH_SEMIBOLD, FONT_PATH_BOLD, BLACK, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+847:        # draw_index_box(draw, LOAD_IDX, 'индекс', 'нагрузки', width, height, LOAD_IDX_BG, int(width*COEFF['season_x']), int(height*0.4521), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
+848:        draw_index_box(draw, LOAD_IDX, width_ss, height_ss, int(width_ss*COEFF['season_x']), int(height_ss*0.4521), FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+850:        # draw_index_box(draw, SPEED_IDX, 'индекс', 'скорости', width, height, SPEED_IDX_BG, int(width*COEFF['season_x']), int(height*0.628), FONT_PATH_BOLD, FONT_PATH_REGULAR, WHITE, debug_logging)
+851:        draw_index_box(draw, SPEED_IDX, width_ss, height_ss, int(width_ss*COEFF['season_x']), int(height_ss*0.628), FONT_PATH_BOLD, WHITE, debug_logging)  # === SUPER SAMPLING/POSTPROCESSING ===
+853:        # --- SUPER SAMPLING: Уменьшаем изображение до целевого размера ---
+854:        # Сначала применим постобработку для повышения резкости и коррекции цвета (до ресайза)
+855:        from PIL import ImageEnhance, ImageFilter  # === SUPER SAMPLING/POSTPROCESSING ===
+857:        # --- Отрисовка иконки сезонности (если задана) ---
+858:        icon_path = get_param('icon_path')
+859:        if icon_path:
+860:            icon_full_path = (PROJECT_ROOT / 'uploads' / 'ai_image' / icon_path).resolve()
+861:            if icon_full_path.exists():
+862:                try:
+863:                    icon_img = Image.open(icon_full_path).convert('RGBA')
+864:                    # Размеры и позиция по COEFF (с учётом суперсэмплинга)
+865:                    icon_w = int(width_ss * COEFF['icon_w'])
+866:                    icon_h = int(height_ss * COEFF['icon_h'])
+867:                    icon_x = int(width_ss * COEFF['icon_x'])
+868:                    icon_y = int(height_ss * COEFF['icon_y'])
+869:                    icon_img = icon_img.resize((icon_w, icon_h), Image.Resampling.LANCZOS)
+870:                    img.alpha_composite(icon_img, (icon_x, icon_y))
+871:                    logger.info(f'[ICON] Иконка сезонности отрисована: {icon_full_path}')
+872:                    # Если требуется сохранить иконку отдельно для отладки — сохраняем с quality=100
+873:                    if debug_logging:
+874:                        debug_icon_path = str(output_path).replace('.', '_debug_icon.')
+875:                        icon_img_to_save = icon_img
+876:                        if debug_icon_path.lower().endswith(('.jpg', '.jpeg')) and icon_img.mode == 'RGBA':
+877:                            icon_img_to_save = icon_img.convert('RGB')
+878:                        icon_img_to_save.save(debug_icon_path, quality=100)
+879:                except Exception as e:
+880:                    logger.error(f'[ICON] Ошибка отрисовки иконки: {e}')
+881:            else:
+882:                logger.warning(f'[ICON] Файл иконки не найден: {icon_full_path}')
+884:        # Постобработка: Повышение резкости
+885:        enhancer_sharpness = ImageEnhance.Sharpness(img)
+886:        img = enhancer_sharpness.enhance(2)  # 1.0 - без изменений, >1 - сильнее
+888:        # Постобработка: Коррекция цвета (насыщенность)
+889:        enhancer_color = ImageEnhance.Color(img)
+890:        img = enhancer_color.enhance(1.3)  # 1.0 - без изменений, >1 - сильнее
+892:        # Можно добавить лёгкую фильтрацию для очистки артефактов
+893:        img = img.filter(ImageFilter.SMOOTH_MORE)  # по желанию
+895:        img = img.resize((width, height), Image.LANCZOS)  # === SUPER SAMPLING/POSTPROCESSING ===
+897:        # --- Сохранение результата ---
+898:        output_filename = str(task['output_filename'])
+899:        # Принудительно меняем расширение на .jpg
+900:        output_filename = Path(output_filename).with_suffix('.jpg').name
+901:        if '/' in output_filename or '\\' in output_filename:
+902:            final_output_path = PROCESSED_DIR / Path(output_filename).name
+903:        else:
+904:            final_output_path = PROCESSED_DIR / output_filename
+905:        # Сохраняем основное изображение только в JPG
+906:        img_to_save = img
+907:        if img_to_save.mode in ('RGBA', 'LA'):
+908:            background = Image.new('RGB', img_to_save.size, (255, 255, 255))
+909:            background.paste(img_to_save, mask=img_to_save.split()[-1])
+910:            img_to_save = background
+911:        else:
+912:            img_to_save = img_to_save.convert('RGB')
+913:        final_output_path.parent.mkdir(parents=True, exist_ok=True)
+914:        img_to_save.save(final_output_path, format='JPEG', quality=100, subsampling=0)
+915:        logger.info(f'[SAVE] Файл сохранен: {final_output_path}')
+916:        logger.info(f'[SAVE] Размер файла: {final_output_path.stat().st_size if final_output_path.exists() else "файл не найден"}')
+917:        logger.info(f'Результат задачи {task["task_id"]} сохранён: {final_output_path}')
+919:        # --- Сохраняем gallery-версию runwayml-изображения ---
+920:        # gallery_filename = f'product_{sku}_ai-gallery.png'
+921:        # gallery_output_path = PROCESSED_DIR / gallery_filename
+922:        # img_to_save.save(gallery_output_path, quality=100, subsampling=0)
+923:        # logger.info(f'[SAVE] Gallery-версия сохранена: {gallery_output_path}')
+925:        # --- Формируем относительный путь для output_image ---
+926:        rel_output_image = str(final_output_path.relative_to(PROJECT_ROOT / "uploads" / "ai_image"))
+927:        rel_gallery_image = str(gallery_output_path.relative_to(PROJECT_ROOT / "uploads" / "ai_image"))
+929:        return rel_output_image, rel_gallery_image
+930:    except Exception as e:
+931:        logger.error(f"[PROCESS] Ошибка обработки изображения: {e}")
+932:        return None, None
+934:def notify_wp_processing(task_id, config):
+935:    url = config.get('wp_api_url')
+936:    secret = config.get('wp_api_secret')
+937:    if not url or not secret:
+938:        logger.warning('WP API url/secret не заданы в config.yaml')
+939:        return
+940:    try:
+941:        resp = requests.post(url, json={'task_id': task_id, 'secret': secret}, timeout=5)
+942:        if resp.status_code == 200:
+943:            logger.info(f'[WP] Статус processing успешно отправлен для {task_id}')
+944:        else:
+945:            logger.warning(f'[WP] Не удалось обновить статус для {task_id}: {resp.status_code} {resp.text}')
+946:    except Exception as e:
+947:        logger.error(f'[WP] Ошибка при отправке статуса processing: {e}')
+949:def process_task(task_path):
+950:    try:
+951:        with open(task_path, 'r', encoding='utf-8') as f:
+952:            task = json.load(f)
+953:        ok, err = validate_task_json(task)
+954:        task_id = task.get('task_id', task_path.stem)
+955:        # --- Уведомление WordPress о начале обработки ---
+956:        notify_wp_processing(task_id, config)
+957:        if not ok:
+958:            logger.error(f'Ошибка валидации задачи {task_id}: {err}')
+959:            # --- Удаляем файл задачи после ошибки ---
+960:            if os.path.exists(task_path):
+961:                os.remove(task_path)
+962:            return
+963:        logger.info(f'Обработка задачи {task_id}')
+964:        error_msg = None
+965:        output_image = None
+966:        gallery_image = None
+967:        try:
+968:            output_image, gallery_image = process_image(task)
+969:        except Exception as e:
+970:            import traceback
+971:            error_msg = str(e) + '\n' + traceback.format_exc()
+972:            logger.error(f'Ошибка обработки изображения: {error_msg}')
+973:        status = 'success' if output_image else 'error'
+974:        result = {
+975:            'task_id': task_id,
+976:            'product_id': task.get('product_id'),
+977:            'status': status,
+978:            'output_image': output_image,
+979:            'gallery_image': gallery_image,
+980:            'message': 'OK' if output_image else (error_msg or 'Ошибка обработки'),
+981:            'started_at': '',
+982:            'finished_at': '',
+983:            'error': error_msg
+984:        }
+985:        result_path = RESULTS_DIR / f'{task_id}.json'
+986:        with open(result_path, 'w', encoding='utf-8') as f:
+987:            json.dump(result, f, ensure_ascii=False, indent=2)
+988:        # --- Удаляем файл задачи после обработки ---
+989:        if os.path.exists(task_path):
+990:            os.remove(task_path)
+991:    except Exception as e:
+992:        logger.error(f'Ошибка при обработке {task_path}: {e}')
+994:def main():
+995:    global current_pause, success_counter
+996:    task_files = list(TASKS_DIR.glob('*.json'))[:BATCH_SIZE]
+997:    for idx, task_file in enumerate(task_files):
+998:        # 1. Проверяем статус processing
+999:        try:
+1000:            with open(task_file, 'r', encoding='utf-8') as f:
+1001:                task = json.load(f)
+1002:        except Exception as e:
+1003:            logger.error(f"[LOCK] Ошибка чтения задачи {task_file}: {e}")
+1004:            continue
+1005:        if task.get('processing'):
+1006:            continue  # Уже в обработке
+1007:        # 2. Ставим статус processing (атомарно)
+1008:        task['processing'] = True
+1009:        try:
+1010:            with open(task_file, 'w', encoding='utf-8') as f:
+1011:                json.dump(task, f, ensure_ascii=False, indent=2)
+1012:        except Exception as e:
+1013:            logger.error(f"[LOCK] Ошибка записи processing в задачу {task_file}: {e}")
+1014:            continue
+1015:        # 3. Обрабатываем задачу с динамической паузой
+1016:        try:
+1017:        process_task(task_file)
+1018:            success_counter += 1
+1019:            if success_counter >= SUCCESS_DECREASE_AFTER:
+1020:                if current_pause > MIN_TASK_INTERVAL_SEC:
+1021:                    old_pause = current_pause
+1022:                    current_pause = max(MIN_TASK_INTERVAL_SEC, current_pause - SUCCESS_DECREASE_STEP)
+1023:                    logger.info(f"[DYN-PAUSE] Несколько успешных задач подряд, уменьшаем паузу: {old_pause} -> {current_pause} сек")
+1024:                success_counter = 0
+1025:        except Exception as e:
+1026:            import runwayml
+1027:            # Если ошибка связана с лимитом или соединением — увеличиваем паузу
+1028:            if isinstance(e, (runwayml.RateLimitError, runwayml.APIConnectionError)):
+1029:                old_pause = current_pause
+1030:                current_pause = min(MAX_TASK_INTERVAL_SEC, current_pause * 2)
+1031:                logger.warning(f"[DYN-PAUSE] Получен RateLimit/APIConnectionError, увеличиваем паузу: {old_pause} -> {current_pause} сек")
+1032:                success_counter = 0
+1033:            else:
+1034:                logger.error(f"[DYN-PAUSE] Ошибка обработки задачи: {e}")
+1035:        # --- Пауза между задачами, кроме последней ---
+1036:        if idx < len(task_files) - 1:
+1037:            logger.info(f"[PAUSE] Пауза {current_pause} сек перед следующей задачей...")
+1038:            time.sleep(current_pause)
+1040:if __name__ == '__main__':
+1041:    debug = args.debug
+1042:    logger = setup_logging(debug)
+1043:    main()

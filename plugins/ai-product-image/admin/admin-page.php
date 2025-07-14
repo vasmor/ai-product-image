@@ -151,6 +151,15 @@ function ai_product_image_admin_page() {
     if ($tab === 'mass') {
         $mass_msg = '';
         $runwayml_prompt = trim(get_option('ai_image_runwayml_prompt', ''));
+        // Новое: получение ids из поля
+        $mass_product_ids_raw = isset($_POST['mass_product_ids']) ? trim($_POST['mass_product_ids']) : '';
+        $mass_product_ids = [];
+        if ($mass_product_ids_raw !== '') {
+            // Разделяем по запятой, пробелу, новой строке
+            $mass_product_ids = preg_split('/[\s,]+/', $mass_product_ids_raw);
+            $mass_product_ids = array_filter(array_map('intval', $mass_product_ids));
+            $mass_product_ids = array_unique($mass_product_ids);
+        }
         // Корректное определение $category_id и $mass_limit
         if (isset($_POST['mass_category_id'])) {
             $category_id = intval($_POST['mass_category_id']);
@@ -170,6 +179,8 @@ function ai_product_image_admin_page() {
         } else {
             $selected_statuses = ['queued','error'];
         }
+        // Новый чекбокс: разрешить повторную обработку
+        $force = !empty($_POST['mass_force_reprocess']);
         if (isset($_POST['mass_start'])) {
             if ($runwayml_prompt === '') {
                 $mass_msg = '<div class="notice notice-error"><p>Промпт для RunwayML не заполнен! Заполните его в настройках.</p></div>';
@@ -178,10 +189,25 @@ function ai_product_image_admin_page() {
                     $mass_msg = '<div class="notice notice-error"><p>В данный момент уже идёт обработка. Повторите позже.</p></div>';
                 } else {
                     $only_instock = get_option('ai_image_only_instock', 0);
-                    if ($only_instock) {
-                        $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, true);
+                    // --- Новая логика: если введены id товаров, работаем только с ними ---
+                    if (!empty($mass_product_ids)) {
+                        $product_ids = $mass_product_ids;
+                        // Фильтрация по остатку, если включено
+                        if ($only_instock) {
+                            $filtered_ids = [];
+                            foreach ($product_ids as $pid) {
+                                $stock = get_post_meta($pid, '_stock', true);
+                                if ($stock > 0) $filtered_ids[] = $pid;
+                            }
+                            $product_ids = $filtered_ids;
+                        }
                     } else {
-                        $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, false);
+                        // Старая логика: выборка по категории и лимиту
+                        if ($only_instock) {
+                            $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, true);
+                        } else {
+                            $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, false);
+                        }
                     }
                     // --- Фильтрация по статусу ---
                     $filtered_ids = [];
@@ -208,7 +234,7 @@ function ai_product_image_admin_page() {
                         $tm = new AI_Product_Image_Task_Manager();
                         $created = 0;
                         foreach ($filtered_ids as $pid) {
-                            $ok = $tm->create_task_for_product($pid, ['force' => false]);
+                            $ok = $tm->create_task_for_product($pid, ['force' => $force]);
                             if ($ok) {
                                 $created++;
                             }
@@ -235,6 +261,22 @@ function ai_product_image_admin_page() {
                 <tr>
                     <th>Лимит товаров на обработку</th>
                     <td><input type="number" name="mass_limit" value="<?php echo esc_attr($mass_limit); ?>" min="1" class="small-text"> (максимум товаров за запуск)</td>
+                </tr>
+                <tr>
+                    <th>ID товаров (через запятую, пробел или с новой строки)</th>
+                    <td>
+                        <textarea name="mass_product_ids" rows="2" cols="60" placeholder="123, 456, 789"><?php echo isset($_POST['mass_product_ids']) ? esc_textarea($_POST['mass_product_ids']) : ''; ?></textarea>
+                        <br><span class="description">Если заполнено, обработка будет только для указанных товаров. Категория и лимит игнорируются.</span>
+                    </td>
+                </tr>
+                <tr>
+                    <th>Повторная обработка</th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="mass_force_reprocess" value="1" <?php if (!empty($_POST['mass_force_reprocess'])) echo 'checked'; ?>>
+                            Разрешить повторную обработку (создавать задачи даже для уже обработанных товаров)
+                        </label>
+                    </td>
                 </tr>
                 <tr>
                     <th>Статусы для массовой обработки</th>
@@ -318,6 +360,25 @@ function ai_product_image_admin_page() {
                     echo "<input type='hidden' name='{$opt}' id='{$opt}' value='{$val}'>";
                     echo "<button type='button' class='button ai-image-media-upload' data-target='{$opt}'>Выбрать/Загрузить</button> ";
                     echo "<span class='ai-image-media-preview' id='{$opt}_preview'>{$file}</span>";
+                    echo "</td></tr>";
+                }
+                ?>
+                <tr><th colspan="2"><b>Иконки сезонности</b></th></tr>
+                <?php
+                $icons = [
+                    'ai_image_icon_winter' => 'Иконка зимней сезонности',
+                    'ai_image_icon_summer' => 'Иконка летней сезонности',
+                    'ai_image_icon_allseason' => 'Иконка всесезонной сезонности',
+                ];
+                foreach ($icons as $opt => $label) {
+                    $id = get_option($opt);
+                    $img = $id ? wp_get_attachment_image($id, 'medium') : '';
+                    $val = esc_attr($id);
+                    if ($id) error_log('[AI_IMAGE_SETTINGS] Сохранён ID иконки ' . $opt . ': ' . $id);
+                    echo "<tr><th>{$label}</th><td>";
+                    echo "<input type='hidden' name='{$opt}' id='{$opt}' value='{$val}'>";
+                    echo "<button type='button' class='button ai-image-media-upload' data-target='{$opt}'>Выбрать/Загрузить</button> ";
+                    echo "<span class='ai-image-media-preview' id='{$opt}_preview'>{$img}</span>";
                     echo "</td></tr>";
                 }
                 ?>
@@ -651,8 +712,9 @@ function ai_product_image_admin_page() {
                     $results[] = "[{$sku}] Товар не найден.";
                     continue;
                 }
-                // Загрузить оригинал в медиабиблиотеку и установить как основное
-                $upload = wp_upload_bits(basename($file), null, file_get_contents($file));
+                // --- Новый шаг: сохраняем оригинал в медиабиблиотеку без префикса norm_sku- ---
+                $original_name = preg_replace('/^' . preg_quote($norm_sku, '/') . '-/', '', basename($file));
+                $upload = wp_upload_bits($original_name, null, file_get_contents($file));
                 if ($upload['error']) {
                     $results[] = "[{$sku}] Ошибка загрузки: {$upload['error']}";
                     continue;
@@ -671,12 +733,17 @@ function ai_product_image_admin_page() {
                 set_post_thumbnail($product_id, $attach_id);
                 // Удалить из галереи, если чекбокс не отмечен
                 if (!$keep_gallery) {
-                    $gallery_ids = get_post_meta($product_id, '_product_image_gallery', true);
-                    $gallery_ids_arr = $gallery_ids ? explode(',', $gallery_ids) : [];
-                    $gallery_ids_arr = array_diff($gallery_ids_arr, [$attach_id]);
-                    update_post_meta($product_id, '_product_image_gallery', implode(',', array_filter($gallery_ids_arr)));
+                    update_post_meta($product_id, '_product_image_gallery', '');
                 }
-                $results[] = "[{$sku}] Восстановлено успешно.";
+                // --- Новый шаг: удаляем обработанные изображения из processed/ ---
+                $processed_dir = trailingslashit(wp_upload_dir()['basedir']) . 'ai_image/processed/';
+                $pattern = $processed_dir . 'product_' . $norm_sku . '_ai*';
+                $processed_files = glob($pattern);
+                $deleted_count = 0;
+                foreach ($processed_files as $pf) {
+                    if (is_file($pf) && unlink($pf)) $deleted_count++;
+                }
+                $results[] = "[{$sku}] Восстановлено успешно. Удалено обработанных файлов: {$deleted_count}.";
             }
             $restore_msg = '<div class="notice notice-info"><p>' . implode('<br>', $results) . '</p></div>';
         }
@@ -842,8 +909,8 @@ function ai_product_image_admin_page() {
     ?>
     <div class="wrap">
         <h1>AI Product Image — управление задачами</h1>
-        <form method="post">
-            <?php wp_nonce_field('ai_image_create_task_action', 'ai_image_create_task_nonce'); ?>
+        <!--<form method="post">
+            <?php //wp_nonce_field('ai_image_create_task_action', 'ai_image_create_task_nonce'); ?>
             <h2>Создать новую задачу (тест)</h2>
             <table class="form-table">
                 <tr>
@@ -856,7 +923,7 @@ function ai_product_image_admin_page() {
                 </tr>
             </table>
             <p><input type="submit" name="ai_image_create_task" class="button button-primary" value="Создать задачу"></p>
-        </form>
+        </form>-->
         <h2>Очередь задач</h2>
         <form method="get" id="ai-image-task-filters" style="margin-bottom: 20px;">
             <input type="hidden" name="page" value="ai-product-image">

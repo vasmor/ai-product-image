@@ -145,4 +145,3 @@ uploads/ai_image/archive/
 
 py/u2net.pth
 py/.env 
-py/ai_image_processor-2.py
