@@ -225,3 +225,38 @@ add_action('pmxi_gallery_image', function($post_id, $att_id, $filepath, $is_keep
 }, 10, 4);
 
 // не забыть добавить в настройки импорта запрет на обновление поля _ai_image_status
+
+// Сниппет для очистки статуса stuck у товаров без результата в results
+add_action('admin_init', function() {
+    if (!current_user_can('manage_options')) return;
+    if (!isset($_GET['fix_stuck_status'])) return;
+    global $wpdb;
+    // 1. Найти все товары со статусом stuck
+    $stuck_ids = $wpdb->get_col("SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_ai_image_status' AND meta_value = 'stuck'");
+    if (!$stuck_ids) {
+        echo '<div class="notice notice-info"><p>Нет товаров со статусом stuck.</p></div>';
+        return;
+    }
+    // 2. Собрать все product_id из файлов results
+    $results_dir = wp_upload_dir()['basedir'] . '/ai_image/results/';
+    $result_files = glob($results_dir . '*.json');
+    $ids_in_results = [];
+    foreach ($result_files as $file) {
+        $data = json_decode(file_get_contents($file), true);
+        if (!empty($data['product_id'])) {
+            $ids_in_results[] = intval($data['product_id']);
+        }
+    }
+    $ids_in_results = array_unique($ids_in_results);
+    // 3. Для всех stuck, которых нет в results, сбросить статус
+    $fixed = 0;
+    foreach ($stuck_ids as $pid) {
+        if (!in_array(intval($pid), $ids_in_results)) {
+            delete_post_meta($pid, '_ai_image_status');
+            delete_post_meta($pid, '_ai_image_error');
+            $fixed++;
+        }
+    }
+    echo '<div class="notice notice-success"><p>Сброшено статусов stuck: ' . $fixed . ' из ' . count($stuck_ids) . '.</p></div>';
+});
+// Для запуска: /wp-admin/?fix_stuck_status=1

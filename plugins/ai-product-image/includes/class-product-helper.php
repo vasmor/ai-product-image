@@ -258,6 +258,8 @@ class AI_Product_Image_Product_Helper {
         }
         self::set_status($product_id, 'applied');
         self::set_error($product_id, '');
+        // После успешного применения результата сбрасываем мета-поле повторной обработки
+        delete_post_meta($product_id, '_ai_repeat_product');
         if (class_exists('AI_Product_Image_Logger')) {
             $logger = AI_Product_Image_Plugin::get_instance()->logger;
             $logger->log('Успешно применено processed-изображение для товара ' . $product_id . ': ' . $image_path);

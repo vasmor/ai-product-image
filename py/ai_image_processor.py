@@ -953,6 +953,24 @@ def notify_wp_processing(task_id, config):
     except Exception as e:
         logger.error(f'[WP] Ошибка при отправке статуса processing: {e}')
 
+def get_processing_status():
+    """
+    Проверяет статус массовой обработки из state/plugin_status.md.
+    Возвращает 'running' (по умолчанию) или 'stopped'.
+    """
+    status_file = Path(__file__).parent.parent / 'state' / 'plugin_status.md'
+    if status_file.exists():
+        try:
+            with open(status_file, 'r', encoding='utf-8') as f:
+                status = f.read().strip().lower()
+            if 'stopped' in status:
+                return 'stopped'
+            if 'running' in status:
+                return 'running'
+        except Exception as e:
+            logger.warning(f"[STATUS] Ошибка чтения plugin_status.md: {e}")
+    return 'running'
+
 def process_task(task_path):
     try:
         with open(task_path, 'r', encoding='utf-8') as f:
@@ -1002,6 +1020,11 @@ def main():
     global current_pause, success_counter
     task_files = list(TASKS_DIR.glob('*.json'))[:BATCH_SIZE]
     for idx, task_file in enumerate(task_files):
+        # --- Проверка статуса массовой обработки ---
+        status = get_processing_status()
+        if status == 'stopped':
+            logger.info("[STATUS] Обработка остановлена по внешнему флагу (plugin_status.md). Завершаем main().")
+            break
         # 1. Проверяем статус processing
         try:
             with open(task_file, 'r', encoding='utf-8') as f:

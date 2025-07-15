@@ -9,6 +9,30 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// --- AJAX: Установить статус массовой обработки ---
+add_action('wp_ajax_set_bulk_status', function() {
+    if (!current_user_can('manage_options')) wp_send_json_error('Недостаточно прав');
+    $status = isset($_POST['status']) && $_POST['status'] === 'stopped' ? 'stopped' : 'running';
+    $file = WP_CONTENT_DIR . '/uploads/ai_image/state/plugin_status.md';
+    file_put_contents($file, $status);
+    wp_send_json_success(['status' => $status]);
+});
+// --- AJAX: Получить статус и прогресс массовой обработки ---
+add_action('wp_ajax_get_bulk_status', function() {
+    if (!current_user_can('manage_options')) wp_send_json_error('Недостаточно прав');
+    $file = WP_CONTENT_DIR . '/uploads/ai_image/state/plugin_status.md';
+    $status = file_exists($file) ? trim(file_get_contents($file)) : 'running';
+    $tasks_dir = WP_CONTENT_DIR . '/uploads/ai_image/tasks/';
+    $results_dir = WP_CONTENT_DIR . '/uploads/ai_image/results/';
+    $total = count(glob($tasks_dir . '*.json')) + count(glob($results_dir . '*.json'));
+    $done = count(glob($results_dir . '*.json'));
+    wp_send_json_success([
+        'status' => $status,
+        'total' => $total,
+        'done' => $done,
+    ]);
+});
+
 /**
  * Выводит страницу управления задачами и настройками
  */
@@ -192,7 +216,7 @@ function ai_product_image_admin_page() {
                     // --- Новая логика: если введены id товаров, работаем только с ними ---
                     if (!empty($mass_product_ids)) {
                         $product_ids = $mass_product_ids;
-                        // Фильтрация по остатку, если включено
+                        // фильтрация по остатку, если включено
                         if ($only_instock) {
                             $filtered_ids = [];
                             foreach ($product_ids as $pid) {
@@ -201,8 +225,32 @@ function ai_product_image_admin_page() {
                             }
                             $product_ids = $filtered_ids;
                         }
+                    } elseif (!empty($selected_statuses)) {
+                        global $wpdb;
+                        $placeholders = implode(',', array_fill(0, count($selected_statuses), '%s'));
+                        $query = $wpdb->prepare(
+                            "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_ai_image_status' AND meta_value IN ($placeholders)",
+                            ...$selected_statuses
+                        );
+                        $product_ids = $wpdb->get_col($query);
+                        // Фильтрация по категории
+                        if ($category_id) {
+                            $product_ids = array_filter($product_ids, function($pid) use ($category_id) {
+                                return AI_Product_Image_Product_Helper::product_in_category_tree($pid, $category_id);
+                            });
+                        }
+                        // Фильтрация по остатку
+                        if ($only_instock) {
+                            $product_ids = array_filter($product_ids, function($pid) {
+                                return get_post_meta($pid, '_stock', true) > 0;
+                            });
+                        }
+                        // Лимит
+                        if ($mass_limit > 0) {
+                            $product_ids = array_slice($product_ids, 0, $mass_limit);
+                        }
                     } else {
-                        // Старая логика: выборка по категории и лимиту
+                        // fallback: выборка по категории и лимиту
                         if ($only_instock) {
                             $product_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, $mass_limit, true);
                         } else {
@@ -212,8 +260,9 @@ function ai_product_image_admin_page() {
                     // --- Фильтрация по статусу ---
                     $filtered_ids = [];
                     if (!empty($selected_statuses)) {
+                        $selected_statuses = array_map(function($s) { return trim(mb_strtolower($s)); }, $selected_statuses);
                         foreach ($product_ids as $pid) {
-                            $status = AI_Product_Image_Product_Helper::get_status($pid);
+                            $status = trim(mb_strtolower(AI_Product_Image_Product_Helper::get_status($pid)));
                             if (in_array($status, $selected_statuses)) {
                                 $filtered_ids[] = $pid;
                             }
@@ -227,6 +276,11 @@ function ai_product_image_admin_page() {
                             }
                         }
                     }
+                    // --- Если выбран stuck, всегда force=true для таких товаров ---
+                    $force_for_stuck = false;
+                    if (in_array('stuck', $selected_statuses)) {
+                        $force_for_stuck = true;
+                    }
                     if (empty($filtered_ids)) {
                         $mass_msg = '<div class="notice notice-warning"><p>Нет товаров для обработки по выбранному фильтру.</p></div>';
                     } else {
@@ -234,7 +288,20 @@ function ai_product_image_admin_page() {
                         $tm = new AI_Product_Image_Task_Manager();
                         $created = 0;
                         foreach ($filtered_ids as $pid) {
-                            $ok = $tm->create_task_for_product($pid, ['force' => $force]);
+                            $is_stuck = (AI_Product_Image_Product_Helper::get_status($pid) === 'stuck');
+                            if ($is_stuck) {
+                                // Удаляем старый результат для stuck
+                                $product = wc_get_product($pid);
+                                $sku = $product ? $product->get_sku() : '';
+                                $norm_sku = $sku ? AI_Product_Image_Product_Helper::normalize_sku($sku) : '';
+                                $results_dir = WP_CONTENT_DIR . '/uploads/ai_image/results/';
+                                // Ищем все возможные файлы результата для этого товара
+                                $result_files = glob($results_dir . '*'.$norm_sku.'*.json');
+                                foreach ($result_files as $rf) {
+                                    @unlink($rf);
+                                }
+                            }
+                            $ok = $tm->create_task_for_product($pid, ['force' => ($force || $force_for_stuck || $is_stuck)]);
                             if ($ok) {
                                 $created++;
                             }
@@ -290,6 +357,7 @@ function ai_product_image_admin_page() {
                             'processing' => 'processing',
                             'processed' => 'processed',
                             'applied' => 'applied',
+                            'stuck' => 'stuck', // добавлен статус stuck
                         ];
                         $status_counts = array_fill_keys(array_keys($status_labels), 0);
                         $all_mass_ids = AI_Product_Image_Product_Helper::get_products_by_category_tree($category_id, -1, get_option('ai_image_only_instock', 0));
@@ -310,6 +378,11 @@ function ai_product_image_admin_page() {
                 <input type="submit" name="mass_stop" class="button button-secondary" value="Остановить">
             </p>
         </form>
+        <div id="bulk-controls" style="margin-bottom:20px;">
+            <button id="btn-bulk-stop" class="button button-secondary" style="display:none;">Остановить</button>
+            <button id="btn-bulk-continue" class="button button-primary" style="display:none;">Продолжить</button>
+            <span id="bulk-progress" style="margin-left:20px;">Статус: ...</span>
+        </div>
         <div id="mass_process_progress">
             <p>Прогресс: <span id="mass_progress_value">0</span> / <span id="mass_progress_total">0</span></p>
         </div>
@@ -585,70 +658,36 @@ function ai_product_image_admin_page() {
                 ];
             }
         }
-        // --- Обработка действий для stuck ---
-        if (isset($_POST['stuck_action']) && check_admin_referer('ai_image_stuck_action', 'ai_image_stuck_nonce')) {
-            $task_id = sanitize_text_field($_POST['stuck_task_id'] ?? '');
-            $product_id = intval($_POST['stuck_product_id'] ?? 0);
-            $action = sanitize_text_field($_POST['stuck_action']);
+        // ... перед выводом stuck-таблицы ...
+        if (isset($_POST['stuck_bulk_delete']) && check_admin_referer('ai_image_stuck_bulk_action', 'ai_image_stuck_bulk_nonce')) {
+            $deleted = 0;
             $results_dir = wp_upload_dir()['basedir'] . '/ai_image/results/';
-            $file = $results_dir . $task_id . '.json';
-            $tm = new AI_Product_Image_Task_Manager();
-            if ($action === 'repeat_apply' && $product_id) {
-                // Повторить попытку применения результата (без AI)
+            $task_ids = array_filter((array)($_POST['stuck_bulk'] ?? []));
+            foreach ($task_ids as $task_id) {
+                $file = $results_dir . $task_id . '.json';
                 if (file_exists($file)) {
-                    $json = file_get_contents($file);
-                    $data = json_decode($json, true);
-                    if ($data) {
-                        $data['attempts'] = 0;
-                        $data['status'] = 'queued';
-                        $data['error'] = 'Повтор применения результата инициирован вручную администратором в ' . date('Y-m-d H:i:s');
-                        file_put_contents($file, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-                        AI_Product_Image_Product_Helper::set_status($product_id, 'queued');
-                        AI_Product_Image_Product_Helper::set_error($product_id, $data['error']);
-                        if (class_exists('AI_Product_Image_Logger')) {
-                            $logger = AI_Product_Image_Plugin::get_instance()->logger;
-                            $logger->log('Повтор применения результата (stuck) инициирован вручную для товара ' . $product_id . ', task_id=' . $task_id, 'info');
-                        }
-                        echo '<div class="notice notice-success"><p>Попытка повторного применения результата для товара #' . $product_id . ' инициирована.</p></div>';
-                    }
-                }
-            } elseif ($action === 'repeat_full' && $product_id) {
-                // Повторить обработку (AI): удалить результат, создать новую задачу
-                if (file_exists($file)) {
+                    // Получаем product_id из файла результата
+                    $data = json_decode(file_get_contents($file), true);
+                    $product_id = isset($data['product_id']) ? intval($data['product_id']) : 0;
                     unlink($file);
-                    if (class_exists('AI_Product_Image_Logger')) {
-                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
-                        $logger->log('Результат stuck удалён вручную для товара ' . $product_id . ', task_id=' . $task_id, 'info');
+                    if ($product_id) {
+                        AI_Product_Image_Product_Helper::reset_status($product_id);
                     }
-                }
-                $ok = $tm->create_task_for_product($product_id, ['force' => true]);
-                if ($ok) {
-                    if (class_exists('AI_Product_Image_Logger')) {
-                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
-                        $logger->log('Повторная обработка (stuck) инициирована вручную для товара ' . $product_id . ', task_id=' . $task_id, 'info');
-                    }
-                    AI_Product_Image_Product_Helper::set_error($product_id, 'Повторная обработка инициирована вручную администратором в ' . date('Y-m-d H:i:s'));
-                    echo '<div class="notice notice-success"><p>Задача на повторную обработку товара #' . $product_id . ' создана!</p></div>';
-                } else {
-                    echo '<div class="notice notice-error"><p>Ошибка создания задачи для товара #' . $product_id . '.</p></div>';
-                }
-            } elseif ($action === 'delete') {
-                if (file_exists($file)) {
-                    unlink($file);
-                    if (class_exists('AI_Product_Image_Logger')) {
-                        $logger = AI_Product_Image_Plugin::get_instance()->logger;
-                        $logger->log('Результат stuck удалён вручную (delete) для task_id=' . $task_id, 'info');
-                    }
-                    echo '<div class="notice notice-success"><p>Файл результата ' . esc_html($task_id) . ' удалён.</p></div>';
-                } else {
-                    echo '<div class="notice notice-error"><p>Файл результата не найден: ' . esc_html($task_id) . '</p></div>';
+                    $deleted++;
                 }
             }
+            echo '<div class="notice notice-success"><p>Удалено результатов: ' . $deleted . '</p></div>';
         }
+        // ...
         if (!empty($stuck_results)) {
             echo '<div style="margin-top:30px;">';
             echo '<h3 style="color:#ff9900;">Зависшие результаты (stuck)</h3>';
-            echo '<table class="widefat"><thead><tr><th>Task ID</th><th>SKU</th><th>Product ID</th><th>Ошибка</th><th>Попыток</th><th>Действия</th></tr></thead><tbody>';
+            echo '<form method="post">';
+            wp_nonce_field('ai_image_stuck_bulk_action', 'ai_image_stuck_bulk_nonce');
+            echo '<table class="widefat"><thead><tr>';
+            echo '<th style="width:30px;"><input type="checkbox" id="stuck-check-all"></th>';
+            echo '<th>Task ID</th><th>SKU</th><th>Product ID</th><th>Ошибка</th><th>Попыток</th><th>Действия</th>';
+            echo '</tr></thead><tbody>';
             foreach ($stuck_results as $res) {
                 $result_file = $results_dir . ($res['task_id'] ?? '') . '.json';
                 $output_image = '';
@@ -664,29 +703,29 @@ function ai_product_image_admin_page() {
                     $original_exists = $files && count($files) > 0;
                 }
                 echo '<tr>';
+                echo '<td><input type="checkbox" name="stuck_bulk[]" value="' . esc_attr($res['task_id']) . '"></td>';
                 echo '<td>' . esc_html($res['task_id']) . '</td>';
                 echo '<td>' . esc_html($res['sku']) . '</td>';
                 echo '<td>' . esc_html($res['product_id']) . '</td>';
                 echo '<td>' . esc_html($res['error']) . '</td>';
                 echo '<td>' . esc_html($res['attempts']) . '</td>';
                 echo '<td>';
-                echo '<form method="post" style="display:inline;">';
-                wp_nonce_field('ai_image_stuck_action', 'ai_image_stuck_nonce');
-                echo '<input type="hidden" name="stuck_task_id" value="' . esc_attr($res['task_id']) . '">';
-                echo '<input type="hidden" name="stuck_product_id" value="' . esc_attr($res['product_id']) . '">';
                 if ($output_image && $original_exists) {
-                    echo '<button type="submit" name="stuck_action" value="repeat_apply" class="button">Повторить применение</button> ';
+                    echo '<button type="submit" name="stuck_action" value="repeat_apply" class="button" disabled style="opacity:0.5;cursor:not-allowed;">Повторить применение</button> ';
                 } else {
-                    echo '<button type="submit" name="stuck_action" value="repeat_full" class="button button-primary">Повторить обработку</button> ';
+                    echo '<button type="submit" name="stuck_action" value="repeat_full" class="button button-primary" disabled style="opacity:0.5;cursor:not-allowed;">Повторить обработку</button> ';
                 }
-                echo '<button type="submit" name="stuck_action" value="delete" class="button" onclick="return confirm(\'Удалить файл результата?\')">Удалить результат</button>';
-                echo '</form>';
+                // Кнопка удаления результата убрана
                 echo '</td>';
                 echo '</tr>';
             }
             echo '</tbody></table>';
+            echo '<p><button type="submit" name="stuck_bulk_delete" class="button button-danger" onclick="return confirm(\'Удалить выбранные результаты?\')">Удалить отмеченные</button></p>';
+            echo '</form>';
             echo '<div style="color:#888;font-size:12px;margin-top:8px;">Файл результата не будет удалён, пока не будет предпринято действие вручную или не изменится логика обработки.</div>';
             echo '</div>';
+            // JS для чекбокса "выделить все"
+            echo '<script>document.addEventListener("DOMContentLoaded",function(){var all=document.getElementById("stuck-check-all");if(all){all.addEventListener("change",function(){document.querySelectorAll("input[name=\\"stuck_bulk[]\\"]").forEach(function(cb){cb.checked=all.checked;});});}});</script>';
         }
         return;
     }
@@ -863,6 +902,39 @@ function ai_product_image_admin_page() {
             </table>
             <p><input type="submit" name="apply_processed_result" class="button button-primary" value="Применить результат"></p>
         </form>
+        <?php
+        // --- Новый раздел: Список товаров для повторной обработки ---
+        $repeat_args = [
+            'post_type' => 'product',
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+            'meta_query' => [
+                [
+                    'key' => '_ai_repeat_product',
+                    'value' => 1,
+                    'compare' => '='
+                ]
+            ]
+        ];
+        $repeat_ids = get_posts($repeat_args);
+        $repeat_skus = [];
+        foreach ($repeat_ids as $pid) {
+            $sku = get_post_meta($pid, '_sku', true);
+            if ($sku) $repeat_skus[] = $sku;
+        }
+        echo '<hr style="margin:30px 0;">';
+        echo '<h2>Список товаров для повторной обработки</h2>';
+        echo '<div style="max-width:700px;">';
+        echo '<label for="ai-repeat-ids"><b>ID товаров</b></label>';
+        echo '<textarea id="ai-repeat-ids" rows="3" style="width:100%;margin-bottom:8px;">' . esc_textarea(implode(",", $repeat_ids)) . '</textarea>';
+        echo '<button type="button" class="button ai-copy-btn" data-target="ai-repeat-ids">Скопировать</button>';
+        echo '<br><br>';
+        echo '<label for="ai-repeat-skus"><b>SKU товаров</b></label>';
+        echo '<textarea id="ai-repeat-skus" rows="3" style="width:100%;margin-bottom:8px;">' . esc_textarea(implode(",", $repeat_skus)) . '</textarea>';
+        echo '<button type="button" class="button ai-copy-btn" data-target="ai-repeat-skus">Скопировать</button>';
+        echo '</div>';
+        echo '<script>document.addEventListener("DOMContentLoaded",function(){document.querySelectorAll(".ai-copy-btn").forEach(function(btn){btn.addEventListener("click",function(){var id=btn.getAttribute("data-target");var ta=document.getElementById(id);ta.select();document.execCommand("copy");btn.textContent="Скопировано!";setTimeout(function(){btn.textContent="Скопировать";},1200);});});});</script>';
+        ?>
         <?php
         return;
     }
